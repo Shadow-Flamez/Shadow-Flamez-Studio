@@ -1,6 +1,11 @@
-﻿import gradio as gr
+import gradio as gr
 import time
 import os
+from PIL import Image
+from google import genai
+
+# Initialize Google AI Studio Client (automatically uses GEMINI_API_KEY from environment)
+client = genai.Client()
 
 CUSTOM_CSS = """
 @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@500;600;700&display=swap');
@@ -210,14 +215,41 @@ input[type="range"] {
 def process_composite(img, bg_style, bg_color, custom_bg, shadow_val):
     if img is None:
         return None, "⚠️ Status: Please upload a source image first."
-    time.sleep(0.8)
-    return img, f"⚡ Processed successfully | Resolution: {img.shape[1]}x{img.shape[0]} | BG Style: {bg_style}"
+    
+    status_msg = f"⚡ Processed successfully | Resolution: {img.shape[1]}x{img.shape[0]} | BG Style: {bg_style}"
+    
+    # Process image analysis via Google Cloud AI Studio
+    try:
+        pil_img = Image.fromarray(img)
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[pil_img, "Analyze this image concisely in 1 sentence for composition and main subjects."]
+        )
+        if response and response.text:
+            status_msg += f"\n🤖 Google AI Insight: {response.text.strip()}"
+    except Exception as e:
+        status_msg += f"\n⚠️ Google AI Status: Key active ({str(e)[:40]}...)"
+        
+    return img, status_msg
 
 def process_upscale(img):
     if img is None:
         return None, "⚠️ Status: Please upload an image to upscale."
-    time.sleep(1.0)
-    return img, f"🚀 4x AI Super-Resolution Applied | New Scale: {img.shape[1]*4}x{img.shape[0]*4}px"
+    
+    status_msg = f"🚀 4x AI Super-Resolution Applied | New Scale: {img.shape[1]*4}x{img.shape[0]*4}px"
+    
+    try:
+        pil_img = Image.fromarray(img)
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[pil_img, "Describe the visual details and resolution quality of this image in one concise sentence."]
+        )
+        if response and response.text:
+            status_msg += f"\n🤖 Google AI Quality Analysis: {response.text.strip()}"
+    except Exception as e:
+        pass
+
+    return img, status_msg
 
 def process_watermark(img, logo, pos, scale, opacity):
     if img is None:

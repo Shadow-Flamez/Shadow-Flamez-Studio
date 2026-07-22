@@ -10,6 +10,8 @@ Description: Comprehensive Gradio Studio Application for AI Neural Background
 """
 
 import os
+os.environ["GRADIO_SERVER_NAME"] = "0.0.0.0"
+os.environ["GRADIO_SERVER_PORT"] = os.environ.get("PORT", "10000")
 import sys
 import time
 import math
@@ -1117,15 +1119,12 @@ def build_studio_app() -> gr.Blocks:
 # ==============================================================================
 
 if __name__ == "__main__":
-    logger.info("Initializing Shadow Flamez AI Studio Pro v5.0...")
-    
-    # Read dynamic port assigned by Render (defaults to 7860 if local)
-    server_port = int(os.environ.get("PORT", 7860))
+    # Get port assigned by Render (defaults to 10000)
+    port = int(os.environ.get("PORT", 10000))
     
     app = build_studio_app()
     app.launch(
         server_name="0.0.0.0",
-        server_port=server_port,
-        show_error=True,
-        share=False
+        server_port=port,
+        show_error=True
     )

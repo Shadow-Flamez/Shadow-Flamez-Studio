@@ -1,6 +1,6 @@
 """
 ================================================================================
- SHADOW FLAMEZ AI STUDIO PRO V5.0 (RENDER OPTIMIZED EDITION)
+ SHADOW FLAMEZ AI STUDIO PRO V5.0 (RENDER DEPLOYMENT & PNG EDITION)
  Neural AI Transparency, Compositing & FX Engine
 ================================================================================
 """
@@ -8,18 +8,16 @@ import os
 import sys
 
 # ==============================================================================
-# 0. HARDWARE & CPU ACCELERATION OPTIMIZATIONS (CRITICAL FOR RENDER)
+# 0. HARDWARE, CPU & DEPLOYMENT PORT BINDING FIXES
 # ==============================================================================
-# Force single-threaded execution to prevent thread thrashing on single-core containers
+# Force single-threaded execution to prevent thread thrashing on cloud containers
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
-os.environ["ORT_LOGGING_LEVEL"] = "3"  # Suppress non-fatal ONNX warnings
-os.environ["ONNXRUNTIME_EXECUTION_PROVIDERS"] = "[CPUExecutionProvider]"
+os.environ["ORT_LOGGING_LEVEL"] = "3"
 os.environ["GRADIO_SERVER_NAME"] = "0.0.0.0"
-os.environ["GRADIO_SERVER_PORT"] = os.environ.get("PORT", "10000")
 
 import time
 import math
@@ -37,7 +35,7 @@ from PIL import Image, ImageEnhance, ImageFilter, ImageOps, ImageDraw, ImageFont
 import gradio as gr
 from rembg import remove, new_session
 
-# Throttle OpenCV multi-threading for cloud container stability
+# Throttle OpenCV multi-threading for container stability
 cv2.setNumThreads(1)
 
 # ==============================================================================
@@ -52,7 +50,6 @@ logger = logging.getLogger("ShadowFlamezStudio")
 
 @dataclass
 class PerformanceMetric:
-    """Dataclass to record processing runtime and operational statistics."""
     task_name: str
     execution_time: float
     timestamp: str = field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
@@ -60,7 +57,6 @@ class PerformanceMetric:
     details: str = ""
 
 class DiagnosticsManager:
-    """Manages system metrics, performance history, memory tracking, and diagnostic logging."""
     def __init__(self):
         self.metrics_history: List[PerformanceMetric] = []
         self.total_processed_count: int = 0
@@ -131,10 +127,9 @@ class DiagnosticsManager:
 diagnostics = DiagnosticsManager()
 
 # ==============================================================================
-# 2. BRANDING & BACKLIT ANIMATED UI CSS STYLING
+# 2. UI BRANDING & ANIMATED BACKLIT STYLING
 # ==============================================================================
 STUDIO_CSS = """
-/* Keyframe Animations */
 @keyframes neon-pulse {
     0% { filter: drop-shadow(0 0 5px #ff0055) drop-shadow(0 0 15px #ff0055); }
     50% { filter: drop-shadow(0 0 20px #00ffff) drop-shadow(0 0 35px #7a00ff); }
@@ -156,13 +151,11 @@ STUDIO_CSS = """
     100% { transform: translateY(0px); }
 }
 
-/* Global Container Improvements */
 .gradio-container {
     background: #08080e !important;
     font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important;
 }
 
-/* Backlit Hover Effects on Buttons */
 button.primary, .gr-button-primary {
     background: linear-gradient(135deg, #ff0055, #7a00ff) !important;
     border: 1px solid #ff0055 !important;
@@ -170,15 +163,13 @@ button.primary, .gr-button-primary {
     font-weight: 700 !important;
     letter-spacing: 1px !important;
     transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1) !important;
-    position: relative !important;
-    overflow: hidden !important;
     border-radius: 10px !important;
 }
 button.primary:hover, .gr-button-primary:hover {
     transform: translateY(-2px) scale(1.01) !important;
     background: linear-gradient(135deg, #ff0066, #00ffff) !important;
     border-color: #00ffff !important;
-    box-shadow: 0 0 25px rgba(0, 255, 255, 0.8), 0 0 50px rgba(255, 0, 85, 0.6), inset 0 0 15px rgba(255, 255, 255, 0.5) !important;
+    box-shadow: 0 0 25px rgba(0, 255, 255, 0.8), 0 0 50px rgba(255, 0, 85, 0.6) !important;
 }
 button.secondary, .gr-button-secondary {
     background: #141424 !important;
@@ -193,7 +184,6 @@ button.secondary:hover, .gr-button-secondary:hover {
     transform: translateY(-2px) !important;
 }
 
-/* Cards & Panel Backlit Hover FX */
 .gr-box, .gr-block, .gr-card, .gr-panel, .gr-form {
     background: #0e0e18 !important;
     border: 1px solid #1f1f35 !important;
@@ -205,7 +195,6 @@ button.secondary:hover, .gr-button-secondary:hover {
     box-shadow: 0 0 20px rgba(0, 255, 255, 0.15), 0 0 40px rgba(122, 0, 255, 0.1) !important;
 }
 
-/* Interactive Image Components Backlit FX */
 .gr-image, .gradio-image {
     border-radius: 12px !important;
     transition: all 0.4s ease !important;
@@ -215,7 +204,6 @@ button.secondary:hover, .gr-button-secondary:hover {
     border-color: #00ffff !important;
 }
 
-/* Header Styling */
 .studio-header {
     background: linear-gradient(-45deg, #07070c, #121226, #1b0c2e, #0c1d2e);
     background-size: 400% 400%;
@@ -226,10 +214,6 @@ button.secondary:hover, .gr-button-secondary:hover {
     text-align: center;
     margin-bottom: 25px;
     box-shadow: 0 15px 50px rgba(0, 0, 0, 0.8), inset 0 0 20px rgba(0, 255, 255, 0.1);
-    position: relative;
-}
-.studio-header:hover {
-    animation: gradient-shift 8s ease infinite, backlit-pulse 4s infinite alternate;
 }
 .logo-container {
     display: inline-block;
@@ -254,7 +238,6 @@ button.secondary:hover, .gr-button-secondary:hover {
     letter-spacing: 0.8px;
 }
 
-/* Status Badge Styles */
 .status-badge {
     padding: 16px 20px;
     border-radius: 12px;
@@ -266,12 +249,7 @@ button.secondary:hover, .gr-button-secondary:hover {
     box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
     transition: all 0.3s ease;
 }
-.status-badge:hover {
-    box-shadow: 0 0 20px rgba(0, 255, 255, 0.4);
-    transform: translateX(4px);
-}
 
-/* Diagnostics HTML Styling */
 .diag-container {
     background: #0f0f1a;
     border: 1px solid #282845;
@@ -279,7 +257,6 @@ button.secondary:hover, .gr-button-secondary:hover {
     border-radius: 16px;
     color: #e0e0e0;
     font-family: 'Consolas', monospace;
-    box-shadow: inset 0 0 15px rgba(0, 0, 0, 0.5);
 }
 .diag-header {
     display: flex;
@@ -312,11 +289,6 @@ button.secondary:hover, .gr-button-secondary:hover {
     border-radius: 10px;
     border: 1px solid #2a2a48;
     text-align: center;
-    transition: all 0.3s ease;
-}
-.diag-card:hover {
-    border-color: #ff0055;
-    box-shadow: 0 0 15px rgba(255, 0, 85, 0.3);
 }
 .diag-label {
     display: block;
@@ -342,7 +314,6 @@ button.secondary:hover, .gr-button-secondary:hover {
     margin: 0;
 }
 
-/* Footer Styling */
 .studio-footer {
     text-align: center;
     padding: 25px;
@@ -350,10 +321,8 @@ button.secondary:hover, .gr-button-secondary:hover {
     font-size: 0.95em;
     border-top: 1px solid #1a1a30;
     margin-top: 40px;
-    letter-spacing: 0.5px;
 }
 
-/* Tab Header Backlit Animations */
 .tabs > .tab-nav > button {
     background: #10101c !important;
     border: 1px solid #202035 !important;
@@ -369,11 +338,6 @@ button.secondary:hover, .gr-button-secondary:hover {
     border-color: #00ffff !important;
     color: #00ffff !important;
     box-shadow: 0 -4px 15px rgba(0, 255, 255, 0.3) !important;
-}
-.tabs > .tab-nav > button:hover:not(.selected) {
-    color: #ffffff !important;
-    border-color: #ff0055 !important;
-    box-shadow: 0 0 12px rgba(255, 0, 85, 0.3) !important;
 }
 """
 
@@ -406,10 +370,9 @@ STUDIO_FOOTER_HTML = """
 """
 
 # ==============================================================================
-# 3. UTILITY & IMAGE CONVERSION ENGINE
+# 3. UTILITY & CONVERSION ENGINE
 # ==============================================================================
 class ImageUtils:
-    """Provides essential utility functions for fast image conversions and matrix calculations."""
     @staticmethod
     def pil_to_cv2(pil_image: Image.Image) -> np.ndarray:
         if pil_image is None:
@@ -445,20 +408,10 @@ class ImageUtils:
             return image.convert("RGBA")
         return image
 
-    @staticmethod
-    def resize_aspect_ratio(image: Image.Image, max_width: int = 1920, max_height: int = 1080) -> Image.Image:
-        w, h = image.size
-        ratio = min(max_width / float(w), max_height / float(h))
-        if ratio < 1.0:
-            new_size = (max(1, int(w * ratio)), max(1, int(h * ratio)))
-            return image.resize(new_size, Image.Resampling.LANCZOS)
-        return image
-
 # ==============================================================================
-# 4. CHECKERBOARD & PATTERN GENERATOR ENGINE
+# 4. CHECKERBOARD & PATTERN GENERATOR
 # ==============================================================================
 class CheckerboardGenerator:
-    """Generates high-performance checkerboard patterns for transparency visualization."""
     @staticmethod
     def create(
         width: int,
@@ -477,10 +430,9 @@ class CheckerboardGenerator:
         return Image.fromarray(bg)
 
 # ==============================================================================
-# 5. NEURAL AI BACKGROUND REMOVAL ENGINE (LAZY LOADED FOR RENDER)
+# 5. NEURAL AI REMOVAL ENGINE (LAZY LOADED FOR FAST RENDER BOOT)
 # ==============================================================================
 class NeuralEngine:
-    """Encapsulates RemBG session models with lazy initialization for fast container boot times."""
     def __init__(self):
         self.sessions: Dict[str, Any] = {}
 
@@ -515,7 +467,7 @@ class NeuralEngine:
         output_rgba = ImageUtils.ensure_rgba(output)
 
         alpha_arr = np.array(output_rgba.split()[3])
-        if np.min(alpha_arr) == 255:  # Mask is completely solid / fallback triggered
+        if np.min(alpha_arr) == 255:  # Fallback on failure
             logger.warning("Neural Engine returned solid mask. Executing adaptive contour fallback...")
             cv_img = ImageUtils.pil_to_cv2(pil_image)
             gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
@@ -530,10 +482,9 @@ class NeuralEngine:
 neural_engine = NeuralEngine()
 
 # ==============================================================================
-# 6. OPENCV FAST CHROMA KEYING ENGINE (GREEN/BLUE SCREEN)
+# 6. OPENCV CHROMA KEYING ENGINE
 # ==============================================================================
 class ChromaKeyEngine:
-    """High-speed HSV color thresholding engine for Green, Blue, and custom color screens."""
     @staticmethod
     def hex_to_hsv(hex_color: str) -> Tuple[int, int, int]:
         hex_val = hex_color.lstrip('#')
@@ -591,10 +542,9 @@ class ChromaKeyEngine:
         return ImageUtils.cv2_to_pil(bgra)
 
 # ==============================================================================
-# 7. IMAGE EFFECTS & ARTISTIC FILTERS ENGINE
+# 7. IMAGE EFFECTS ENGINE
 # ==============================================================================
 class ImageEffectsEngine:
-    """Applies post-processing color grading, sharpening, and artistic filters."""
     @staticmethod
     def adjust_colors(
         pil_image: Image.Image,
@@ -636,21 +586,6 @@ class ImageEffectsEngine:
         return Image.fromarray(sepia_np)
 
     @staticmethod
-    def apply_vignette(pil_image: Image.Image, intensity: float = 0.5) -> Image.Image:
-        rgba = ImageUtils.ensure_rgba(pil_image)
-        w, h = rgba.size
-        x = np.linspace(-1, 1, w)
-        y = np.linspace(-1, 1, h)
-        xx, yy = np.meshgrid(x, y)
-        radius = np.sqrt(xx**2 + yy**2)
-        vignette_mask = np.clip(1.0 - (radius * intensity), 0, 1)
-        np_img = np.array(rgba, dtype=np.float32)
-        np_img[:, :, 0] *= vignette_mask
-        np_img[:, :, 1] *= vignette_mask
-        np_img[:, :, 2] *= vignette_mask
-        return Image.fromarray(np_img.astype(np.uint8))
-
-    @staticmethod
     def apply_neon_outline(
         pil_image: Image.Image,
         glow_color: str = "#00FFFF",
@@ -680,10 +615,9 @@ class ImageEffectsEngine:
         return Image.alpha_composite(glow_pil, rgba)
 
 # ==============================================================================
-# 8. COMPOSITING & BACKGROUND REPLACEMENT ENGINE
+# 8. COMPOSITING ENGINE
 # ==============================================================================
 class CompositingEngine:
-    """Handles compositing of foreground RGBA layers over various background styles."""
     @staticmethod
     def create_gradient_background(
         width: int,
@@ -705,7 +639,7 @@ class CompositingEngine:
             x_ratios = np.linspace(0, 1, width)[None, :]
             col_matrix = (1.0 - x_ratios.T) * c1 + x_ratios.T * c2
             bg[:, :, :3] = np.tile(col_matrix[None, :, :], (height, 1, 1))
-        else:  # Linear Diagonal
+        else:
             y_coords, x_coords = np.ogrid[:height, :width]
             diag_ratios = (x_coords / float(width) + y_coords / float(height)) / 2.0
             bg[:, :, 0] = (1.0 - diag_ratios) * c1[0] + diag_ratios * c2[0]
@@ -748,10 +682,9 @@ class CompositingEngine:
         return fg_rgba
 
 # ==============================================================================
-# 9. BRANDING & WATERMARK ENGINE
+# 9. WATERMARK ENGINE
 # ==============================================================================
 class WatermarkEngine:
-    """Overlays custom text signatures or image logos onto rendered compositions."""
     @staticmethod
     def apply_text_watermark(
         image: Image.Image,
@@ -786,7 +719,7 @@ class WatermarkEngine:
             pos = ((w - text_w) // 2, (h - text_h) // 2)
         elif position == "Bottom Left":
             pos = (margin, h - text_h - margin)
-        else:  # Bottom Right
+        else:
             pos = (w - text_w - margin, h - text_h - margin)
 
         hex_val = text_color.lstrip('#')
@@ -799,10 +732,9 @@ class WatermarkEngine:
         return Image.alpha_composite(base, txt_layer)
 
 # ==============================================================================
-# 10. BATCH PROCESSING ENGINE
+# 10. BATCH PROCESSING ENGINE (FORCED PNG ZIP EXPORT)
 # ==============================================================================
 class BatchEngine:
-    """Processes multiple image files sequentially and bundles outputs into a ZIP archive."""
     @staticmethod
     def process_batch(
         image_list: List[Any],
@@ -844,13 +776,14 @@ class BatchEngine:
                     )
                     processed_images.append(final_img)
 
+                    # Strictly save output files as loss-less PNG
                     img_byte_arr = io.BytesIO()
                     final_img.save(img_byte_arr, format="PNG")
                     zip_file.writestr(f"shadow_flamez_out_{idx + 1:03d}.png", img_byte_arr.getvalue())
                 except Exception as e:
                     logger.error(f"Error processing batch item {idx + 1}: {e}")
 
-                gc.collect()  # Release memory per batch frame
+                gc.collect()
 
         zip_buffer.seek(0)
         zip_path = os.path.join(os.getcwd(), "shadow_flamez_batch_export.zip")
@@ -974,7 +907,7 @@ def watermark_pipeline(
         return None, format_status_badge(f"Watermark failure: {str(e)}", "error")
 
 # ==============================================================================
-# 12. BUILD GRADIO INTERFACE APPLICATION
+# 12. BUILD GRADIO APP INTERFACE (FORCED PNG OUTPUT FORMATS)
 # ==============================================================================
 def build_studio_app() -> gr.Blocks:
     with gr.Blocks(title="Shadow Flamez AI Studio Pro v5.0", css=STUDIO_CSS, theme=gr.themes.Slate()) as demo:
@@ -1026,6 +959,7 @@ def build_studio_app() -> gr.Blocks:
                     with gr.Column(scale=1):
                         gr.Markdown("### 📤 Studio Render Result")
                         status_box = gr.HTML(format_status_badge("System Ready. Upload an image to start.", "info"))
+                        # FORCED PNG OUTPUT
                         output_img = gr.Image(type="pil", label="Rendered Output", format="png", interactive=False)
 
                 btn_process.click(
@@ -1062,7 +996,8 @@ def build_studio_app() -> gr.Blocks:
                     with gr.Column(scale=1):
                         gr.Markdown("### 📤 Filtered Result")
                         fx_status = gr.HTML(format_status_badge("FX Engine Ready.", "info"))
-                        fx_output_img = gr.Image(type="pil", label="FX Output", format="png")
+                        # FORCED PNG OUTPUT
+                        fx_output_img = gr.Image(type="pil", label="FX Output", format="png", interactive=False)
 
                 btn_fx.click(
                     fn=fx_pipeline,
@@ -1094,7 +1029,8 @@ def build_studio_app() -> gr.Blocks:
                     with gr.Column(scale=1):
                         gr.Markdown("### 📤 Branded Output")
                         wm_status = gr.HTML(format_status_badge("Watermark Engine Ready.", "info"))
-                        wm_output_img = gr.Image(type="pil", label="Watermarked Output")
+                        # FORCED PNG OUTPUT
+                        wm_output_img = gr.Image(type="pil", label="Watermarked Output", format="png", interactive=False)
 
                 btn_wm.click(
                     fn=watermark_pipeline,
@@ -1124,7 +1060,8 @@ def build_studio_app() -> gr.Blocks:
                     with gr.Column(scale=1):
                         gr.Markdown("### 📤 Batch Output Gallery & Download")
                         batch_status = gr.HTML(format_status_badge("Batch Queue Empty.", "info"))
-                        batch_gallery = gr.Gallery(label="Batch Output Gallery", columns=3)
+                        # FORCED PNG GALLERY OUTPUT
+                        batch_gallery = gr.Gallery(label="Batch Output Gallery", columns=3, format="png")
                         batch_zip_file = gr.File(label="Download Processed ZIP Archive")
 
                 btn_batch.click(
@@ -1144,10 +1081,11 @@ def build_studio_app() -> gr.Blocks:
     return demo
 
 # ==============================================================================
-# 13. APPLICATION ENTRY POINT
+# 13. ENTRY POINT & DYNAMIC RENDER PORT BINDING FIX
 # ==============================================================================
 if __name__ == "__main__":
     app_demo = build_studio_app()
+    # Read dynamic PORT provided by Render (defaults to 10000 locally)
     port_number = int(os.environ.get("PORT", 10000))
     app_demo.launch(
         server_name="0.0.0.0",

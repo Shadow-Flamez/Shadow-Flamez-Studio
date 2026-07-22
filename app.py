@@ -2,28 +2,42 @@
 app.py - Main Gradio Application Entry Point
 """
 import sys
-import time
-from typing import Optional, Tuple
-from PIL import Image
+import traceback
 
-# Force stdout to flush immediately for Render logs
-sys.stdout.flush()
+# 1. Force instant unbuffered output at line 1
+print("--> [1/4] app.py script initiated...", flush=True)
 
-import gradio as gr
+try:
+    print("--> [2/4] Importing core dependencies & studio modules...", flush=True)
+    import os
+    import time
+    from typing import Optional, Tuple
+    from PIL import Image
 
-# Load environment configuration first
-import config
-from utils import ImageUtils
-from diagnostics import diagnostics, logger
-from styles import STUDIO_CSS, STUDIO_HEADER_HTML, STUDIO_FOOTER_HTML
-from neural_engine import neural_engine
-from chroma_engine import ChromaKeyEngine
-from compositor import CompositingEngine
+    import config
+    from utils import ImageUtils
+    from diagnostics import diagnostics, logger
+    from styles import STUDIO_CSS, STUDIO_HEADER_HTML, STUDIO_FOOTER_HTML
+    from neural_engine import neural_engine
+    from chroma_engine import ChromaKeyEngine
+    from compositor import CompositingEngine
+
+    print("--> [3/4] Importing Gradio framework...", flush=True)
+    import gradio as gr
+
+    print("--> All core modules imported successfully!", flush=True)
+
+except Exception as err:
+    print(f"\n❌ CRITICAL STARTUP/IMPORT ERROR:\n{err}", flush=True)
+    traceback.print_exc()
+    sys.exit(1)
+
 
 def format_status_badge(message: str, status_type: str = "info") -> str:
     color_map = {"info": "#00ffff", "success": "#00ff66", "warning": "#ffaa00", "error": "#ff0055"}
     border_col = color_map.get(status_type, "#00ffff")
     return f'<div class="status-badge" style="border-left-color: {border_col};">STATUS: {message}</div>'
+
 
 def single_image_pipeline(
     input_image: Optional[Image.Image],
@@ -62,6 +76,7 @@ def single_image_pipeline(
         logger.error(f"Pipeline error: {e}")
         diagnostics.record_task("Single Image Pipeline", 0.0, status="ERROR", details=str(e))
         return None, format_status_badge(f"Error executing task: {str(e)}", "error")
+
 
 def build_studio_app() -> gr.Blocks:
     with gr.Blocks(title="Shadow Flamez AI Studio Pro v5.0", css=STUDIO_CSS) as demo:
@@ -111,11 +126,17 @@ def build_studio_app() -> gr.Blocks:
         gr.HTML(STUDIO_FOOTER_HTML)
     return demo
 
+
 if __name__ == "__main__":
-    print(f"--> Starting Gradio server on 0.0.0.0:{config.PORT}...", flush=True)
-    app_demo = build_studio_app()
-    app_demo.launch(
-        server_name="0.0.0.0",
-        server_port=config.PORT,
-        show_error=True
-    )
+    print(f"--> [4/4] Launching Gradio web service on 0.0.0.0:{config.PORT}...", flush=True)
+    try:
+        app_demo = build_studio_app()
+        app_demo.queue().launch(
+            server_name="0.0.0.0",
+            server_port=config.PORT,
+            share=False
+        )
+    except Exception as launch_err:
+        print(f"\n❌ GRADIO LAUNCH ERROR:\n{launch_err}", flush=True)
+        traceback.print_exc()
+        sys.exit(1)

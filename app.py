@@ -1,817 +1,1123 @@
-import gradio as gr
+"""
+================================================================================
+                    SHADOW FLAMEZ AI STUDIO PRO V5.0
+               Enterprise Transparency & Image Engine
+================================================================================
+Description: Comprehensive Gradio Studio Application for AI Neural Background
+             Removal, HSV Chroma Keying, FX Filtering, Watermarking, and Batch
+             Processing. Built with OpenCV, PIL, RemBG, and Gradio.
+================================================================================
+"""
+
 import os
+import sys
 import time
-import gc
-import concurrent.futures
-import requests
+import math
+import io
+import zipfile
+import logging
+from typing import Tuple, List, Optional, Dict, Union, Any
+from dataclasses import dataclass, field
+from datetime import datetime
+
+import cv2
 import numpy as np
-from PIL import Image, ImageEnhance, ImageOps, ImageFilter, ImageDraw, ImageFont
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps, ImageDraw, ImageFont
+import gradio as gr
+from rembg import remove, new_session
 
-# =========================================================
-# 01. MEMORY & THREAD POOL CONFIGURATION
-# =========================================================
-EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=4)
-GLOBAL_REMBG_SESSION = None
+# ==============================================================================
+# 1. LOGGING & SYSTEM DIAGNOSTICS INITIALIZATION
+# ==============================================================================
 
-def get_rembg_session():
-    global GLOBAL_REMBG_SESSION
-    if GLOBAL_REMBG_SESSION is None:
-        try:
-            from rembg import new_session
-            GLOBAL_REMBG_SESSION = new_session("u2netp")
-        except Exception as e:
-            print(f"⚠️ Rembg Session Load Warning: {e}")
-            GLOBAL_REMBG_SESSION = "FALLBACK"
-    return GLOBAL_REMBG_SESSION
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+logger = logging.getLogger("ShadowFlamezStudio")
 
-def force_free_memory():
-    """Purge RAM buffers to prevent Render 512MB RAM OOM crashes."""
-    gc.collect()
 
-def optimize_image_size(pil_img, max_dim=1024):
-    """Cap image resolution dynamically for speed and memory protection."""
-    w, h = pil_img.size
-    if max(w, h) > max_dim:
-        scale = max_dim / float(max(w, h))
-        return pil_img.resize((int(w * scale), int(h * scale)), Image.Resampling.BILINEAR)
-    return pil_img
+@dataclass
+class PerformanceMetric:
+    """Dataclass to record processing runtime and operational statistics."""
+    task_name: str
+    execution_time: float
+    timestamp: str = field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    status: str = "SUCCESS"
+    details: str = ""
 
-def hex_to_rgb(hex_str):
-    if not hex_str:
-        return (0, 0, 0)
-    hex_str = hex_str.lstrip('#')
-    return tuple(int(hex_str[i:i+2], 16) for i in (0, 2, 4))
 
-# =========================================================
-# 02. CYBERPUNK ANIMATION & HIGH-TECH STYLING (CSS)
-# =========================================================
-CUSTOM_CSS = """
-@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@500;600;700&display=swap');
+class DiagnosticsManager:
+    """Manages system metrics, performance history, and diagnostic logging."""
+    def __init__(self):
+        self.metrics_history: List[PerformanceMetric] = []
+        self.total_processed_count: int = 0
+        self.start_time: float = time.time()
 
-@keyframes cyber-pulse {
-    0% { box-shadow: 0 0 15px rgba(255, 69, 0, 0.4), inset 0 0 10px rgba(255, 69, 0, 0.2); }
-    50% { box-shadow: 0 0 30px rgba(0, 240, 255, 0.6), inset 0 0 20px rgba(0, 240, 255, 0.3); }
-    100% { box-shadow: 0 0 15px rgba(255, 69, 0, 0.4), inset 0 0 10px rgba(255, 69, 0, 0.2); }
+    def record_task(self, task_name: str, exec_time: float, status: str = "SUCCESS", details: str = ""):
+        metric = PerformanceMetric(
+            task_name=task_name,
+            execution_time=exec_time,
+            status=status,
+            details=details
+        )
+        self.metrics_history.append(metric)
+        if status == "SUCCESS":
+            self.total_processed_count += 1
+        logger.info(f"Task '{task_name}' executed in {exec_time:.3f}s with status [{status}]")
+
+    def get_uptime(self) -> str:
+        uptime_seconds = int(time.time() - self.start_time)
+        hours, remainder = divmod(uptime_seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+    def generate_report_html(self) -> str:
+        avg_time = (
+            sum(m.execution_time for m in self.metrics_history) / len(self.metrics_history)
+            if self.metrics_history else 0.0
+        )
+        html = f"""
+        <div style="background: #12121a; border: 1px solid #2a2a3d; padding: 15px; border-radius: 10px; color: #e0e0e0; font-family: monospace;">
+            <h4 style="color: #00ffff; margin-top: 0;">📊 System Health & Analytics</h4>
+            <p>⏱️ <b>System Uptime:</b> {self.get_uptime()}</p>
+            <p>🖼️ <b>Total Images Processed:</b> {self.total_processed_count}</p>
+            <p>⚡ <b>Average Processing Time:</b> {avg_time:.2f} seconds</p>
+            <hr style="border: 0; border-top: 1px solid #333;">
+            <h5 style="color: #ff0055; margin-bottom: 5px;">Execution Log (Last 5 Tasks):</h5>
+            <ul style="padding-left: 20px; font-size: 0.9em;">
+        """
+        for m in reversed(self.metrics_history[-5:]):
+            color = "#00ff66" if m.status == "SUCCESS" else "#ff0055"
+            html += f'<li><span style="color:{color};">[{m.timestamp}]</span> <b>{m.task_name}</b> - {m.execution_time:.2f}s ({m.details})</li>'
+        html += "</ul></div>"
+        return html
+
+
+diagnostics = DiagnosticsManager()
+
+# ==============================================================================
+# 2. BRANDING & UI STYLING CONSTANTS (CSS, SVG, HTML TEMPLATES)
+# ==============================================================================
+
+STUDIO_CSS = """
+@keyframes neon-pulse {
+    0% { filter: drop-shadow(0 0 5px #ff0055) drop-shadow(0 0 15px #ff0055); }
+    50% { filter: drop-shadow(0 0 18px #00ffff) drop-shadow(0 0 35px #7a00ff); }
+    100% { filter: drop-shadow(0 0 5px #ff0055) drop-shadow(0 0 15px #ff0055); }
 }
 
-@keyframes text-glow {
-    0% { text-shadow: 0 0 8px rgba(255, 69, 0, 0.8); }
-    50% { text-shadow: 0 0 18px rgba(0, 240, 255, 0.9), 0 0 30px rgba(138, 43, 226, 0.8); }
-    100% { text-shadow: 0 0 8px rgba(255, 69, 0, 0.8); }
+@keyframes gradient-shift {
+    0% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
 }
 
-body, .gradio-container {
-    background-color: #030108 !important;
-    background-image: 
-        radial-gradient(circle at 15% 20%, rgba(255, 69, 0, 0.15) 0%, transparent 45%),
-        radial-gradient(circle at 85% 80%, rgba(0, 240, 255, 0.12) 0%, transparent 50%),
-        radial-gradient(circle at 50% 50%, rgba(138, 43, 226, 0.08) 0%, transparent 65%) !important;
-    font-family: 'Rajdhani', sans-serif !important;
-    color: #F1F5F9 !important;
+@keyframes border-glow {
+    0% { border-color: #ff0055; }
+    50% { border-color: #00ffff; }
+    100% { border-color: #ff0055; }
 }
 
-#studio-header {
-    background: rgba(10, 6, 18, 0.88) !important;
-    border: 1px solid rgba(255, 69, 0, 0.5) !important;
-    border-radius: 16px !important;
-    padding: 24px !important;
-    text-align: center !important;
-    margin-bottom: 20px !important;
-    animation: cyber-pulse 4s infinite ease-in-out !important;
-    backdrop-filter: blur(12px) !important;
+.studio-header {
+    background: linear-gradient(-45deg, #0a0a0f, #141428, #1a0f2e, #0f243a);
+    background-size: 400% 400%;
+    animation: gradient-shift 12s ease infinite;
+    padding: 30px;
+    border-radius: 16px;
+    border: 1px solid #2e2e4a;
+    text-align: center;
+    margin-bottom: 25px;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
 }
 
-#studio-header h1 {
-    font-family: 'Orbitron', sans-serif !important;
-    font-size: 2.4rem !important;
-    font-weight: 900 !important;
-    letter-spacing: 4px !important;
-    background: linear-gradient(135deg, #FF4500 0%, #FF8C00 30%, #00F0FF 70%, #8A2BE2 100%) !important;
-    -webkit-background-clip: text !important;
-    -webkit-text-fill-color: transparent !important;
-    animation: text-glow 3s infinite ease-in-out !important;
-    text-transform: uppercase !important;
-    margin: 0 !important;
+.logo-container {
+    display: inline-block;
+    animation: neon-pulse 3.5s infinite alternate;
 }
 
-.cyber-panel {
-    background: rgba(13, 8, 22, 0.8) !important;
-    border: 1px solid rgba(0, 240, 255, 0.3) !important;
-    border-radius: 14px !important;
-    padding: 20px !important;
-    backdrop-filter: blur(16px) !important;
-    transition: transform 0.2s ease, border-color 0.3s ease !important;
+.studio-title {
+    font-family: 'Impact', 'Arial Black', sans-serif;
+    font-size: 2.8em;
+    font-weight: 900;
+    margin: 12px 0 6px 0;
+    background: linear-gradient(90deg, #ff0055, #ff5500, #ffff00, #00ffff, #7a00ff);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    letter-spacing: 2.5px;
 }
 
-.cyber-panel:hover {
-    border-color: rgba(255, 69, 0, 0.6) !important;
+.studio-subtitle {
+    color: #9090b8;
+    font-size: 1.15em;
+    font-weight: 500;
+    margin: 0;
+    letter-spacing: 0.5px;
 }
 
-.cyber-btn {
-    background: linear-gradient(135deg, #FF4500 0%, #8A2BE2 100%) !important;
-    border: 1px solid rgba(255, 255, 255, 0.3) !important;
-    color: #FFFFFF !important;
-    font-family: 'Orbitron', sans-serif !important;
-    font-size: 0.95rem !important;
-    font-weight: 700 !important;
-    letter-spacing: 2px !important;
-    text-transform: uppercase !important;
-    border-radius: 8px !important;
-    padding: 14px !important;
-    box-shadow: 0 0 20px rgba(255, 69, 0, 0.4) !important;
-    cursor: pointer !important;
-    transition: all 0.3s ease !important;
+.status-badge {
+    padding: 14px 18px;
+    border-radius: 10px;
+    background: #12121e;
+    border-left: 6px solid #00ffff;
+    color: #ffffff;
+    font-weight: 600;
+    font-family: 'Courier New', monospace;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
 }
 
-.cyber-btn:hover {
-    transform: translateY(-2px) scale(1.01) !important;
-    box-shadow: 0 0 30px rgba(0, 240, 255, 0.7) !important;
-}
-
-.transfer-btn {
-    background: rgba(0, 240, 255, 0.1) !important;
-    border: 1px solid rgba(0, 240, 255, 0.5) !important;
-    color: #00F0FF !important;
-    font-family: 'Orbitron', sans-serif !important;
-    font-size: 0.8rem !important;
-    font-weight: 600 !important;
-    border-radius: 6px !important;
-    transition: all 0.2s ease !important;
-}
-
-.transfer-btn:hover {
-    background: rgba(0, 240, 255, 0.25) !important;
-    box-shadow: 0 0 15px rgba(0, 240, 255, 0.5) !important;
-}
-
-div[data-testid="image"], .gradio-image {
-    background-color: rgba(6, 4, 12, 0.95) !important;
-    border: 2px dashed rgba(0, 240, 255, 0.4) !important;
-    border-radius: 12px !important;
+.studio-footer {
+    text-align: center;
+    padding: 20px;
+    color: #707090;
+    font-size: 0.9em;
+    border-top: 1px solid #202035;
+    margin-top: 30px;
 }
 """
 
-# =========================================================
-# 03. CORE PROCESSING ENGINES
-# =========================================================
+STUDIO_HEADER_HTML = """
+<div class="studio-header">
+    <div class="logo-container">
+        <svg width="90" height="90" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+                <linearGradient id="flameGradMain" x1="0%" y1="100%" x2="100%" y2="0%">
+                    <stop offset="0%" style="stop-color:#ff0055;stop-opacity:1" />
+                    <stop offset="50%" style="stop-color:#7a00ff;stop-opacity:1" />
+                    <stop offset="100%" style="stop-color:#00ffff;stop-opacity:1" />
+                </linearGradient>
+            </defs>
+            <circle cx="50" cy="50" r="46" fill="none" stroke="url(#flameGradMain)" stroke-width="4" stroke-dasharray="10 5"/>
+            <path d="M50 12 C28 35, 18 55, 34 78 C44 90, 56 90, 66 78 C82 55, 72 35, 50 12 Z" fill="url(#flameGradMain)" opacity="0.85"/>
+            <path d="M50 28 C36 44, 30 58, 40 72 C46 80, 54 80, 60 72 C70 58, 64 44, 50 28 Z" fill="#0a0a0f"/>
+            <path d="M50 44 C42 54, 38 62, 45 70 C48 75, 52 75, 55 70 C62 62, 58 54, 50 44 Z" fill="url(#flameGradMain)"/>
+        </svg>
+    </div>
+    <div class="studio-title">SHADOW FLAMEZ STUDIO</div>
+    <div class="studio-subtitle">⚡ Enterprise AI Neural Transparency, FX & Compositing Suite v5.0</div>
+</div>
+"""
 
-def execute_background_removal(pil_img, engine_mode, threshold=238):
-    start_time = time.time()
-    img = optimize_image_size(pil_img, max_dim=1024)
-    
-    if engine_mode == "⚡ Fast Matrix Keying (< 0.2s)":
-        img_rgba = img.convert("RGBA")
-        data = np.array(img_rgba)
-        r, g, b, a = data[:, :, 0], data[:, :, 1], data[:, :, 2], data[:, :, 3]
-        mask = (r > threshold) & (g > threshold) & (b > threshold)
-        data[:, :, 3] = np.where(mask, 0, a)
-        cutout = Image.fromarray(data)
-        mode_used = "Vectorized Matrix Keyer"
-        del data, mask
-    else:
-        session = get_rembg_session()
-        if session != "FALLBACK" and session is not None:
+STUDIO_FOOTER_HTML = """
+<div class="studio-footer">
+    🔥 <b>Shadow Flamez AI Studio Pro v5.0</b> | High-Performance Python & OpenCV Image Processing Engine
+</div>
+"""
+
+# ==============================================================================
+# 3. UTILITY & IMAGE CONVERSION ENGINE
+# ==============================================================================
+
+
+class ImageUtils:
+    """Provides essential utility functions for image conversions and calculations."""
+
+    @staticmethod
+    def pil_to_cv2(pil_image: Image.Image) -> np.ndarray:
+        """Converts PIL Image (RGB/RGBA) to OpenCV NumPy array (BGR/BGRA)."""
+        if pil_image is None:
+            raise ValueError("Input PIL Image cannot be None.")
+
+        np_img = np.array(pil_image)
+        if np_img.ndim == 2:  # Grayscale
+            return cv2.cvtColor(np_img, cv2.COLOR_GRAY2BGR)
+        elif np_img.shape[2] == 3:  # RGB
+            return cv2.cvtColor(np_img, cv2.COLOR_RGB2BGR)
+        elif np_img.shape[2] == 4:  # RGBA
+            return cv2.cvtColor(np_img, cv2.COLOR_RGBA2BGRA)
+        return np_img
+
+    @staticmethod
+    def cv2_to_pil(cv2_image: np.ndarray) -> Image.Image:
+        """Converts OpenCV NumPy array (BGR/BGRA) to PIL Image (RGB/RGBA)."""
+        if cv2_image is None:
+            raise ValueError("Input OpenCV array cannot be None.")
+
+        if cv2_image.ndim == 2:  # Grayscale
+            return Image.fromarray(cv2_image)
+        elif cv2_image.shape[2] == 3:  # BGR
+            rgb = cv2.cvtColor(cv2_image, cv2.COLOR_BGR2RGB)
+            return Image.fromarray(rgb)
+        elif cv2_image.shape[2] == 4:  # BGRA
+            rgba = cv2.cvtColor(cv2_image, cv2.COLOR_BGRA2RGBA)
+            return Image.fromarray(rgba)
+        return Image.fromarray(cv2_image)
+
+    @staticmethod
+    def ensure_rgba(image: Union[Image.Image, np.ndarray]) -> Image.Image:
+        """Ensures the image is returned as a 4-channel RGBA PIL Image."""
+        if isinstance(image, np.ndarray):
+            image = ImageUtils.cv2_to_pil(image)
+
+        if image.mode != "RGBA":
+            return image.convert("RGBA")
+        return image
+
+    @staticmethod
+    def resize_aspect_ratio(
+        image: Image.Image,
+        max_width: int = 1920,
+        max_height: int = 1080
+    ) -> Image.Image:
+        """Resizes an image preserving aspect ratio within bounding box limits."""
+        w, h = image.size
+        ratio = min(max_width / float(w), max_height / float(h))
+        if ratio < 1.0:
+            new_size = (int(w * ratio), int(h * ratio))
+            return image.resize(new_size, Image.Resampling.LANCZOS)
+        return image
+
+
+# ==============================================================================
+# 4. CHECKERBOARD & PATTERN GENERATOR ENGINE
+# ==============================================================================
+
+
+class CheckerboardGenerator:
+    """Generates dynamic checkerboard patterns for visualizing transparent backgrounds."""
+
+    @staticmethod
+    def create(
+        width: int,
+        height: int,
+        square_size: int = 20,
+        color1: Tuple[int, int, int] = (200, 200, 200),
+        color2: Tuple[int, int, int] = (240, 240, 240)
+    ) -> Image.Image:
+        """Creates a high-contrast checkerboard background grid."""
+        width = max(1, width)
+        height = max(1, height)
+        square_size = max(2, square_size)
+
+        bg = np.zeros((height, width, 4), dtype=np.uint8)
+
+        for y in range(0, height, square_size):
+            for x in range(0, width, square_size):
+                if (x // square_size + y // square_size) % 2 == 0:
+                    bg[y:y + square_size, x:x + square_size] = [color1[0], color1[1], color1[2], 255]
+                else:
+                    bg[y:y + square_size, x:x + square_size] = [color2[0], color2[1], color2[2], 255]
+
+        return Image.fromarray(bg)
+
+
+# ==============================================================================
+# 5. NEURAL AI BACKGROUND REMOVAL ENGINE (REMBG INTEGRATION)
+# ==============================================================================
+
+
+class NeuralEngine:
+    """Encapsulates RemBG session models for AI-driven background extraction."""
+
+    def __init__(self):
+        self.sessions: Dict[str, Any] = {}
+        # Pre-load lightweight model for zero latency
+        self._get_session("u2netp")
+
+    def _get_session(self, model_name: str):
+        if model_name not in self.sessions:
+            logger.info(f"Loading RemBG Session model: [{model_name}]...")
             try:
-                from rembg import remove
-                cutout = remove(img, session=session)
-                mode_used = "Neural u2netp AI"
-            except Exception:
-                cutout = execute_background_removal(img, "⚡ Fast Matrix Keying (< 0.2s)")[0]
-                mode_used = "Matrix Keyer (Fallback)"
+                self.sessions[model_name] = new_session(model_name)
+            except Exception as e:
+                logger.error(f"Failed to load model {model_name}: {e}. Falling back to u2netp.")
+                if "u2netp" not in self.sessions:
+                    self.sessions["u2netp"] = new_session("u2netp")
+                return self.sessions["u2netp"]
+        return self.sessions[model_name]
+
+    def remove_background(
+        self,
+        pil_image: Image.Image,
+        model_name: str = "u2netp",
+        alpha_matting: bool = False,
+        foreground_threshold: int = 240,
+        background_threshold: int = 10
+    ) -> Image.Image:
+        """Performs AI neural background removal returning a 4-channel RGBA PIL Image."""
+        session = self._get_session(model_name)
+
+        output = remove(
+            pil_image,
+            session=session,
+            alpha_matting=alpha_matting,
+            alpha_matting_foreground_threshold=foreground_threshold,
+            alpha_matting_background_threshold=background_threshold
+        )
+        return ImageUtils.ensure_rgba(output)
+
+
+neural_engine = NeuralEngine()
+
+# ==============================================================================
+# 6. OPENCV FAST CHROMA KEYING ENGINE (GREEN/BLUE SCREEN)
+# ==============================================================================
+
+
+class ChromaKeyEngine:
+    """High-speed HSV color thresholding engine for Green, Blue, and custom color screens."""
+
+    @staticmethod
+    def hex_to_hsv(hex_color: str) -> Tuple[int, int, int]:
+        """Converts HEX color string to OpenCV HSV representation."""
+        hex_val = hex_color.lstrip('#')
+        if len(hex_val) != 6:
+            hex_val = "00FF00"  # Default Green
+        r = int(hex_val[0:2], 16)
+        g = int(hex_val[2:4], 16)
+        b = int(hex_val[4:6], 16)
+
+        bgr = np.uint8([[[b, g, r]]])
+        hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+        return int(hsv[0][0][0]), int(hsv[0][0][1]), int(hsv[0][0][2])
+
+    @staticmethod
+    def process_keying(
+        pil_image: Image.Image,
+        screen_type: str = "Green Screen",
+        custom_hex: str = "#00FF00",
+        hue_tolerance: int = 15,
+        sat_min: int = 40,
+        val_min: int = 40,
+        feather_radius: int = 2,
+        spill_suppression: bool = True
+    ) -> Image.Image:
+        """Executes HSV color keying, mask generation, feathering, and alpha merging."""
+        img_np = np.array(ImageUtils.ensure_rgba(pil_image))
+        img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGBA2BGR)
+        hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
+
+        # Determine target HSV center
+        if screen_type == "Green Screen":
+            target_h, target_s, target_v = 60, 200, 200
+        elif screen_type == "Blue Screen":
+            target_h, target_s, target_v = 120, 200, 200
         else:
-            cutout = execute_background_removal(img, "⚡ Fast Matrix Keying (< 0.2s)")[0]
-            mode_used = "Matrix Keyer (RAM Saver)"
-            
-    elapsed = time.time() - start_time
-    return cutout, mode_used, elapsed
+            target_h, target_s, target_v = ChromaKeyEngine.hex_to_hsv(custom_hex)
 
-# FEATURE 1: COMPOSITOR (Attribute Bug Fixed)
-def process_composite(img_arr, engine_mode, bg_style, bg_color, custom_bg_arr, shadow_val, colab_url=""):
-    if img_arr is None:
-        return None, None, "⚠️ Status: Upload a source image first.", gr.Tabs(selected="result_subtab")
+        # Calculate HSV bounding range
+        lower_h = max(0, target_h - hue_tolerance)
+        upper_h = min(179, target_h + hue_tolerance)
 
-    try:
-        # BUG FIX: Safe string check for NoneType
-        if colab_url and isinstance(colab_url, str) and colab_url.strip():
-            try:
-                endpoint = f"{colab_url.strip().rstrip('/')}/api/predict"
-                payload = {"task": "composite", "params": {"engine": engine_mode}}
-                response = requests.post(endpoint, json=payload, timeout=20)
-                if response.status_code == 200:
-                    res_data = response.json()
-                    res = res_data.get("result")
-                    return res, res, "🚀 Processed via Remote Colab Instance", gr.Tabs(selected="result_subtab")
-            except Exception as bridge_err:
-                print(f"Colab Bridge Notice: {bridge_err} - Processing on local Render container.")
+        lower_bound = np.array([lower_h, sat_min, val_min], dtype=np.uint8)
+        upper_bound = np.array([upper_h, 255, 255], dtype=np.uint8)
 
-        orig_img = Image.fromarray(img_arr).convert("RGBA")
-        cutout_img, mode_used, exec_time = execute_background_removal(orig_img, engine_mode)
-        
-        if bg_style == "Transparent":
-            res = cutout_img
-            status_style = "Transparent Cutout"
-        elif bg_style == "Solid Color":
-            color_rgb = hex_to_rgb(bg_color)
-            bg = Image.new("RGBA", cutout_img.size, color_rgb + (255,))
-            
-            if shadow_val > 0:
-                shadow = cutout_img.copy()
-                shadow_alpha = shadow.split()[3].point(lambda i: int(i * (shadow_val / 100.0)))
-                shadow.putalpha(shadow_alpha)
-                shadow = shadow.filter(ImageFilter.BoxBlur(5))
-                bg.paste(shadow, (10, 10), shadow)
-                del shadow
-                
-            bg.paste(cutout_img, (0, 0), cutout_img)
-            res = bg.convert("RGB")
-            status_style = f"Solid Color ({bg_color})"
-        elif bg_style == "Custom Background" and custom_bg_arr is not None:
-            bg = Image.fromarray(custom_bg_arr).convert("RGBA").resize(cutout_img.size, Image.Resampling.BILINEAR)
-            bg.paste(cutout_img, (0, 0), cutout_img)
-            res = bg.convert("RGB")
-            status_style = "Custom Composite"
-        else:
-            res = orig_img
-            status_style = "Original Image"
+        # Create mask of background pixels
+        mask = cv2.inRange(hsv, lower_bound, upper_bound)
 
-        status = f"⚡ Rendered in {exec_time:.2f}s | Engine: {mode_used} | Res: {res.width}x{res.height}px | Style: {status_style}"
-        out_res, out_cut = np.array(res), np.array(cutout_img)
-        
-        del orig_img, cutout_img
-        force_free_memory()
-        return out_res, out_cut, status, gr.Tabs(selected="result_subtab")
-        
-    except Exception as e:
-        force_free_memory()
-        return None, None, f"⚠️ Error: {str(e)}", gr.Tabs(selected="result_subtab")
+        # Invert mask: Subject = 255 (Opaque), Background = 0 (Transparent)
+        subject_mask = cv2.bitwise_not(mask)
 
-# FEATURE 2: 4X AI UPSCALER
-def process_upscale(img_arr, sharpness_val, color_boost):
-    if img_arr is None:
-        return None, "⚠️ Status: Upload an image to upscale."
+        # Apply Spill Suppression (Remove color cast from edges)
+        if spill_suppression and screen_type == "Green Screen":
+            b_ch, g_ch, r_ch = cv2.split(img_bgr)
+            # Limit Green channel intensity to max of Blue and Red
+            max_bg_r = cv2.max(b_ch, r_ch)
+            g_ch = cv2.min(g_ch, max_bg_r)
+            img_bgr = cv2.merge([b_ch, g_ch, r_ch])
 
-    try:
-        start_time = time.time()
-        img = Image.fromarray(img_arr)
-        img = optimize_image_size(img, max_dim=900)
-        
-        new_size = (img.width * 4, img.height * 4)
-        upscaled = img.resize(new_size, Image.Resampling.LANCZOS)
+        # Apply Feathering (Gaussian Blur on Alpha Mask)
+        if feather_radius > 0:
+            ksize = feather_radius * 2 + 1
+            subject_mask = cv2.GaussianBlur(subject_mask, (ksize, ksize), 0)
 
-        if sharpness_val > 1.0:
-            sharpener = ImageEnhance.Sharpness(upscaled)
-            upscaled = sharpener.enhance(sharpness_val)
+        # Merge BGR channels with new Alpha mask
+        b_ch, g_ch, r_ch = cv2.split(img_bgr)
+        bgra = cv2.merge([b_ch, g_ch, r_ch, subject_mask])
 
-        if color_boost > 1.0:
-            enhancer = ImageEnhance.Color(upscaled)
-            upscaled = enhancer.enhance(color_boost)
+        return ImageUtils.cv2_to_pil(bgra)
 
-        elapsed = time.time() - start_time
-        status = f"🚀 4x Super-Res Completed in {elapsed:.2f}s | Output Size: {upscaled.width}x{upscaled.height}px"
-        res_arr = np.array(upscaled)
-        
-        del img, upscaled
-        force_free_memory()
-        return res_arr, status
-    except Exception as e:
-        force_free_memory()
-        return None, f"⚠️ Upscale Error: {str(e)}"
 
-# FEATURE 3: BRAND WATERMARK
-def process_watermark(img_arr, logo_arr, pos, scale, opacity, rotation):
-    if img_arr is None:
-        return None, "⚠️ Status: Base image required."
-    if logo_arr is None:
-        return img_arr, "⚠️ Status: Upload a logo image."
+# ==============================================================================
+# 7. IMAGE EFFECTS & ARTISTIC FILTERS ENGINE
+# ==============================================================================
 
-    try:
-        start_time = time.time()
-        base = Image.fromarray(img_arr).convert("RGBA")
-        logo = Image.fromarray(logo_arr).convert("RGBA")
 
-        if rotation != 0:
-            logo = logo.rotate(rotation, expand=True, resample=Image.Resampling.BICUBIC)
+class ImageEffectsEngine:
+    """Applies post-processing color grading, sharpening, and artistic filters."""
 
-        logo_width = max(int(base.width * (scale / 100.0)), 20)
-        aspect_ratio = logo.height / float(logo.width)
-        logo_height = int(logo_width * aspect_ratio)
-        logo = logo.resize((logo_width, logo_height), Image.Resampling.BILINEAR)
+    @staticmethod
+    def adjust_colors(
+        pil_image: Image.Image,
+        brightness: float = 1.0,
+        contrast: float = 1.0,
+        saturation: float = 1.0,
+        sharpness: float = 1.0
+    ) -> Image.Image:
+        """Applies basic color corrections (Brightness, Contrast, Saturation, Sharpness)."""
+        img = pil_image.copy()
 
-        r, g, b, alpha = logo.split()
-        alpha = alpha.point(lambda i: int(i * (opacity / 100.0)))
-        logo.putalpha(alpha)
+        if brightness != 1.0:
+            img = ImageEnhance.Brightness(img).enhance(brightness)
+        if contrast != 1.0:
+            img = ImageEnhance.Contrast(img).enhance(contrast)
+        if saturation != 1.0:
+            img = ImageEnhance.Color(img).enhance(saturation)
+        if sharpness != 1.0:
+            img = ImageEnhance.Sharpness(img).enhance(sharpness)
 
-        margin = int(base.width * 0.03)
-        if pos == "Bottom Right":
-            x, y = base.width - logo_width - margin, base.height - logo_height - margin
-        elif pos == "Bottom Left":
-            x, y = margin, base.height - logo_height - margin
-        elif pos == "Top Right":
-            x, y = base.width - logo_width - margin, margin
-        elif pos == "Top Left":
-            x, y = margin, margin
-        else:
-            x, y = (base.width - logo_width) // 2, (base.height - logo_height) // 2
+        return img
 
-        watermarked = base.copy()
-        watermarked.paste(logo, (x, y), logo)
-        
-        elapsed = time.time() - start_time
-        status = f"🏷️ Watermarked in {elapsed:.2f}s | Pos: {pos} | Scale: {scale}% | Angle: {rotation}°"
-        res_arr = np.array(watermarked.convert("RGB"))
-        
-        del base, logo, watermarked
-        force_free_memory()
-        return res_arr, status
-    except Exception as e:
-        force_free_memory()
-        return None, f"⚠️ Watermark Error: {str(e)}"
+    @staticmethod
+    def apply_cyberpunk_filter(pil_image: Image.Image) -> Image.Image:
+        """Applies a high-contrast Cyberpunk Teal & Magenta color grade."""
+        img_rgba = ImageUtils.ensure_rgba(pil_image)
+        r, g, b, a = img_rgba.split()
 
-# FEATURE 4: CYBER FX ENGINE
-def process_cyber_fx(img_arr, fx_type, intensity):
-    if img_arr is None:
-        return None, "⚠️ Upload image first."
+        # Enhance Cyan in B/G and Pink/Magenta in R
+        r = ImageEnhance.Brightness(r).enhance(1.2)
+        b = ImageEnhance.Brightness(b).enhance(1.4)
+        g = ImageEnhance.Contrast(g).enhance(0.9)
 
-    try:
-        start_time = time.time()
-        img = Image.fromarray(img_arr).convert("RGB")
-        img = optimize_image_size(img, max_dim=1024)
+        merged = Image.merge("RGBA", (r, g, b, a))
+        return ImageEnhance.Contrast(merged).enhance(1.25)
 
-        if fx_type == "🔥 Shadow Flame Aura":
-            enhancer = ImageEnhance.Color(img)
-            img = enhancer.enhance(1.0 + (intensity / 50.0))
-            contrast = ImageEnhance.Contrast(img)
-            img = contrast.enhance(1.2)
-        elif fx_type == "🤖 Neon Edge Cyberpunk":
-            edges = img.filter(ImageFilter.FIND_EDGES)
-            edges = ImageOps.invert(edges)
-            img = Image.blend(img, edges, alpha=(intensity / 100.0))
-        elif fx_type == "⚡ High-Contrast Dark Glow":
-            enhancer = ImageEnhance.Contrast(img)
-            img = enhancer.enhance(1.0 + (intensity / 40.0))
-        
-        elapsed = time.time() - start_time
-        status = f"✨ Cyber FX Applied in {elapsed:.2f}s | Preset: {fx_type}"
-        res_arr = np.array(img)
-        
-        del img
-        force_free_memory()
-        return res_arr, status
-    except Exception as e:
-        force_free_memory()
-        return None, f"⚠️ FX Error: {str(e)}"
+    @staticmethod
+    def apply_neon_outline(
+        pil_image: Image.Image,
+        glow_color: str = "#00FFFF",
+        thickness: int = 5
+    ) -> Image.Image:
+        """Generates a glowing neon outline around alpha subject boundaries."""
+        rgba = ImageUtils.ensure_rgba(pil_image)
+        alpha = rgba.split()[3]
 
-# =========================================================
-# NEW FEATURES (05 - 10)
-# =========================================================
+        # Extract edge contour from alpha channel
+        alpha_np = np.array(alpha)
+        edges = cv2.Canny(alpha_np, 100, 200)
 
-# FEATURE 5: NEON OUTER GLOW & ENERGY AURA
-def process_energy_aura(img_arr, glow_color_hex, glow_radius, glow_blur):
-    if img_arr is None:
-        return None, "⚠️ Please upload a cutout or image."
-    try:
-        start_time = time.time()
-        img = Image.fromarray(img_arr).convert("RGBA")
-        img = optimize_image_size(img, max_dim=1024)
-        
-        # Extract alpha channel
-        alpha = img.split()[3]
-        
-        # Create solid color image for glow
-        glow_color = hex_to_rgb(glow_color_hex)
-        glow_mask = alpha.filter(ImageFilter.MaxFilter(int(glow_radius)))
-        glow_mask = glow_mask.filter(ImageFilter.GaussianBlur(int(glow_blur)))
-        
-        glow_img = Image.new("RGBA", img.size, glow_color + (255,))
-        glow_img.putalpha(glow_mask)
-        
-        # Paste subject over glow
-        combined = Image.new("RGBA", img.size, (0, 0, 0, 0))
-        combined.paste(glow_img, (0,0), glow_img)
-        combined.paste(img, (0,0), img)
-        
-        elapsed = time.time() - start_time
-        res_arr = np.array(combined)
-        del img, glow_mask, glow_img, combined
-        force_free_memory()
-        return res_arr, f"🔥 Aura Generated in {elapsed:.2f}s | Color: {glow_color_hex}"
-    except Exception as e:
-        force_free_memory()
-        return None, f"⚠️ Aura Error: {str(e)}"
+        if thickness > 1:
+            kernel = np.ones((thickness, thickness), np.uint8)
+            edges = cv2.dilate(edges, kernel, iterations=1)
 
-# FEATURE 6: SOCIAL CANVAS & ASPECT RATIO RESIZER
-def process_canvas_resize(img_arr, ratio, padding_color, blur_bg):
-    if img_arr is None:
-        return None, "⚠️ Upload an image."
-    try:
-        start_time = time.time()
-        img = Image.fromarray(img_arr).convert("RGB")
-        w, h = img.size
-        
-        aspect_dict = {
-            "1:1 Square (Insta/Profile)": (1080, 1080),
-            "16:9 Landscape (YouTube/Banner)": (1920, 1080),
-            "9:16 Portrait (Reels/TikTok)": (1080, 1920),
-            "4:5 Portrait (Insta Post)": (1080, 1350)
-        }
-        
-        target_w, target_h = aspect_dict.get(ratio, (1080, 1080))
-        
-        if blur_bg:
-            canvas = img.resize((target_w, target_h), Image.Resampling.BILINEAR)
-            canvas = canvas.filter(ImageFilter.GaussianBlur(25))
-        else:
-            bg_rgb = hex_to_rgb(padding_color)
-            canvas = Image.new("RGB", (target_w, target_h), bg_rgb)
-            
-        # Scale subject proportionally into canvas
-        scale = min(target_w / float(w), target_h / float(h))
-        new_w, new_h = int(w * scale), int(h * scale)
-        resized_img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-        
-        offset_x = (target_w - new_w) // 2
-        offset_y = (target_h - new_h) // 2
-        canvas.paste(resized_img, (offset_x, offset_y))
-        
-        elapsed = time.time() - start_time
-        res_arr = np.array(canvas)
-        del img, canvas, resized_img
-        force_free_memory()
-        return res_arr, f"📐 Canvas Formatted in {elapsed:.2f}s | Target: {target_w}x{target_h}px"
-    except Exception as e:
-        force_free_memory()
-        return None, f"⚠️ Canvas Error: {str(e)}"
+        # Smooth edge glow
+        edges_blur = cv2.GaussianBlur(edges, (15, 15), 0)
 
-# FEATURE 7: CYBER GLITCH & CHROMATIC ABERRATION
-def process_glitch_effect(img_arr, shift_pixels, scanlines):
-    if img_arr is None:
-        return None, "⚠️ Upload an image."
-    try:
-        start_time = time.time()
-        img = Image.fromarray(img_arr).convert("RGB")
-        img = optimize_image_size(img, max_dim=1024)
-        
-        arr = np.array(img)
-        r = arr[:, :, 0]
-        g = arr[:, :, 1]
-        b = arr[:, :, 2]
-        
-        # Horizontal Chromatic Shift
-        r_shifted = np.roll(r, int(shift_pixels), axis=1)
-        b_shifted = np.roll(b, -int(shift_pixels), axis=1)
-        
-        glitch_arr = np.stack([r_shifted, g, b_shifted], axis=2)
-        glitch_img = Image.fromarray(glitch_arr)
-        
-        if scanlines:
-            draw = ImageDraw.Draw(glitch_img)
-            for y in range(0, glitch_img.height, 4):
-                draw.line([(0, y), (glitch_img.width, y)], fill=(0, 0, 0, 100), width=1)
-                
-        elapsed = time.time() - start_time
-        res_arr = np.array(glitch_img)
-        del img, arr, r, g, b, glitch_img
-        force_free_memory()
-        return res_arr, f"🎞️ Cyber Glitch Applied in {elapsed:.2f}s | Shift: {shift_pixels}px"
-    except Exception as e:
-        force_free_memory()
-        return None, f"⚠️ Glitch Error: {str(e)}"
+        # Colorize edge glow
+        hex_val = glow_color.lstrip('#')
+        gr_col = tuple(int(hex_val[i:i+2], 16) for i in (0, 2, 4))
 
-# FEATURE 8: CINEMATIC LIGHTING & VIGNETTE
-def process_cinematic_vignette(img_arr, vignette_strength, warm_cool_tint):
-    if img_arr is None:
-        return None, "⚠️ Upload an image."
-    try:
-        start_time = time.time()
-        img = Image.fromarray(img_arr).convert("RGB")
-        img = optimize_image_size(img, max_dim=1024)
-        
-        # Color temperature tinting
-        if warm_cool_tint != 0:
-            enhancer = ImageEnhance.Color(img)
-            img = enhancer.enhance(1.1)
-            arr = np.array(img, dtype=np.float32)
-            if warm_cool_tint > 0: # Warm / Fire
-                arr[:, :, 0] = np.clip(arr[:, :, 0] + warm_cool_tint * 0.5, 0, 255)
-            else: # Cool / Cyber
-                arr[:, :, 2] = np.clip(arr[:, :, 2] - warm_cool_tint * 0.5, 0, 255)
-            img = Image.fromarray(arr.astype(np.uint8))
-            
-        # Vignette Mask creation
-        w, h = img.size
-        x = np.linspace(-1, 1, w)
-        y = np.linspace(-1, 1, h)
-        X, Y = np.meshgrid(x, y)
-        radius = np.sqrt(X**2 + Y**2)
-        vignette_mask = 1 - np.clip(radius * (vignette_strength / 100.0), 0, 1)
-        vignette_mask = np.stack([vignette_mask]*3, axis=2)
-        
-        img_arr_val = np.array(img, dtype=np.float32) * vignette_mask
-        res_img = Image.fromarray(np.clip(img_arr_val, 0, 255).astype(np.uint8))
-        
-        elapsed = time.time() - start_time
-        res_arr = np.array(res_img)
-        del img, res_img
-        force_free_memory()
-        return res_arr, f"🎭 Cinematic Lighting Rendered in {elapsed:.2f}s"
-    except Exception as e:
-        force_free_memory()
-        return None, f"⚠️ Lighting Error: {str(e)}"
+        glow_bg = np.zeros((rgba.height, rgba.width, 4), dtype=np.uint8)
+        glow_bg[edges_blur > 10] = [gr_col[0], gr_col[1], gr_col[2], 255]
 
-# FEATURE 9: TYPOGRAPHY & BANNER GENERATOR
-def process_text_overlay(img_arr, header_text, sub_text, text_color, bg_plate_opacity, text_pos):
-    if img_arr is None:
-        return None, "⚠️ Upload an image."
-    try:
-        start_time = time.time()
-        img = Image.fromarray(img_arr).convert("RGBA")
-        img = optimize_image_size(img, max_dim=1024)
-        
-        overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
-        draw = ImageDraw.Draw(overlay)
-        
-        font_size = max(24, int(img.width * 0.05))
-        sub_font_size = int(font_size * 0.6)
-        
+        glow_pil = Image.fromarray(glow_bg).filter(ImageFilter.GaussianBlur(3))
+
+        # Composite original subject over glow outline
+        return Image.alpha_composite(glow_pil, rgba)
+
+
+# ==============================================================================
+# 8. COMPOSITING & BACKGROUND REPLACEMENT ENGINE
+# ==============================================================================
+
+
+class CompositingEngine:
+    """Handles compositing of foreground RGBA layers over various background styles."""
+
+    @staticmethod
+    def create_gradient_background(
+        width: int,
+        height: int,
+        color_start_hex: str = "#ff0055",
+        color_end_hex: str = "#00ffff",
+        angle: str = "Linear Diagonal"
+    ) -> Image.Image:
+        """Generates smooth multi-color linear or radial gradient backgrounds."""
+        hex1 = color_start_hex.lstrip('#')
+        hex2 = color_end_hex.lstrip('#')
+
+        c1 = np.array([int(hex1[i:i+2], 16) for i in (0, 2, 4)], dtype=float)
+        c2 = np.array([int(hex2[i:i+2], 16) for i in (0, 2, 4)], dtype=float)
+
+        bg = np.zeros((height, width, 4), dtype=np.uint8)
+
+        if angle == "Linear Vertical":
+            for y in range(height):
+                ratio = y / float(height)
+                col = (1.0 - ratio) * c1 + ratio * c2
+                bg[y, :] = [int(col[0]), int(col[1]), int(col[2]), 255]
+
+        elif angle == "Linear Horizontal":
+            for x in range(width):
+                ratio = x / float(width)
+                col = (1.0 - ratio) * c1 + ratio * c2
+                bg[:, x] = [int(col[0]), int(col[1]), int(col[2]), 255]
+
+        else:  # Diagonal
+            for y in range(height):
+                for x in range(width):
+                    ratio = (x / float(width) + y / float(height)) / 2.0
+                    col = (1.0 - ratio) * c1 + ratio * c2
+                    bg[y, x] = [int(col[0]), int(col[1]), int(col[2]), 255]
+
+        return Image.fromarray(bg)
+
+    @staticmethod
+    def composite_layers(
+        foreground: Image.Image,
+        bg_option: str = "Checkerboard Preview",
+        solid_hex: str = "#0F3460",
+        grad_start_hex: str = "#FF0055",
+        grad_end_hex: str = "#00FFFF",
+        grad_style: str = "Linear Diagonal",
+        custom_bg_img: Optional[Image.Image] = None
+    ) -> Image.Image:
+        """Composites foreground RGBA subject onto user-selected background type."""
+        fg_rgba = ImageUtils.ensure_rgba(foreground)
+        w, h = fg_rgba.size
+
+        if bg_option == "Transparent (PNG)":
+            return fg_rgba
+
+        elif bg_option == "Checkerboard Preview":
+            bg = CheckerboardGenerator.create(w, h)
+            return Image.alpha_composite(bg, fg_rgba)
+
+        elif bg_option == "Solid Custom Color":
+            hex_val = solid_hex.lstrip('#')
+            rgb_col = tuple(int(hex_val[i:i+2], 16) for i in (0, 2, 4)) + (255,)
+            bg = Image.new("RGBA", (w, h), rgb_col)
+            return Image.alpha_composite(bg, fg_rgba)
+
+        elif bg_option == "Gradient Color":
+            bg = CompositingEngine.create_gradient_background(
+                w, h, grad_start_hex, grad_end_hex, grad_style
+            )
+            return Image.alpha_composite(bg, fg_rgba)
+
+        elif bg_option == "Custom Background Image":
+            if custom_bg_img is not None:
+                bg_resized = custom_bg_img.convert("RGBA").resize((w, h), Image.Resampling.LANCZOS)
+                return Image.alpha_composite(bg_resized, fg_rgba)
+            else:
+                # Fallback to checkerboard if no custom image was provided
+                bg = CheckerboardGenerator.create(w, h)
+                return Image.alpha_composite(bg, fg_rgba)
+
+        return fg_rgba
+
+
+# ==============================================================================
+# 9. BRANDING & WATERMARK ENGINE
+# ==============================================================================
+
+
+class WatermarkEngine:
+    """Overlays custom text signatures or image logos onto rendered compositions."""
+
+    @staticmethod
+    def apply_text_watermark(
+        image: Image.Image,
+        text: str = "SHADOW FLAMEZ STUDIO",
+        position: str = "Bottom Right",
+        opacity: float = 0.7,
+        font_size: int = 32,
+        text_color: str = "#FFFFFF"
+    ) -> Image.Image:
+        """Draws branded text watermark onto image canvas with customizable position and opacity."""
+        if not text.strip():
+            return image
+
+        base = ImageUtils.ensure_rgba(image).copy()
+        txt_layer = Image.new("RGBA", base.size, (255, 255, 255, 0))
+        draw = ImageDraw.Draw(txt_layer)
+
+        # Load font safely or default
         try:
-            font = ImageFont.truetype("DejaVuSans-Bold.ttf", font_size)
-            sub_font = ImageFont.truetype("DejaVuSans.ttf", sub_font_size)
-        except Exception:
+            font = ImageFont.truetype("arial.ttf", font_size)
+        except OSError:
             font = ImageFont.load_default()
-            sub_font = font
-            
-        tc_rgb = hex_to_rgb(text_color)
-        
-        # Positions
-        y_pos = int(img.height * 0.15) if text_pos == "Top Banner" else int(img.height * 0.75)
-        
-        # Background plate banner
-        if bg_plate_opacity > 0:
-            plate_h = font_size + sub_font_size + 40
-            plate_box = [0, y_pos - 15, img.width, y_pos + plate_h]
-            draw.rectangle(plate_box, fill=(5, 2, 12, int(255 * (bg_plate_opacity / 100.0))))
-            
-        draw.text((30, y_pos), header_text.upper(), fill=tc_rgb + (255,), font=font)
-        draw.text((32, y_pos + font_size + 8), sub_text, fill=(200, 220, 255, 230), font=sub_font)
-        
-        combined = Image.alpha_composite(img, overlay)
-        elapsed = time.time() - start_time
-        res_arr = np.array(combined.convert("RGB"))
-        del img, overlay, combined
-        force_free_memory()
-        return res_arr, f"✏️ Banner Stamped in {elapsed:.2f}s | Title: {header_text[:15]}..."
-    except Exception as e:
-        force_free_memory()
-        return None, f"⚠️ Text Overlay Error: {str(e)}"
 
-# FEATURE 10: CYBER DUOTONE GRADIENT MAPPER
-def process_duotone_palette(img_arr, color1_hex, color2_hex):
-    if img_arr is None:
-        return None, "⚠️ Upload an image."
-    try:
+        # Calculate bounding box of text
+        bbox = draw.textbbox((0, 0), text, font=font)
+        text_w = bbox[2] - bbox[0]
+        text_h = bbox[3] - bbox[1]
+
+        w, h = base.size
+        margin = 20
+
+        if position == "Top Left":
+            pos = (margin, margin)
+        elif position == "Top Right":
+            pos = (w - text_w - margin, margin)
+        elif position == "Center":
+            pos = ((w - text_w) // 2, (h - text_h) // 2)
+        elif position == "Bottom Left":
+            pos = (margin, h - text_h - margin)
+        else:  # Bottom Right
+            pos = (w - text_w - margin, h - text_h - margin)
+
+        hex_val = text_color.lstrip('#')
+        rgb = tuple(int(hex_val[i:i+2], 16) for i in (0, 2, 4))
+        alpha_val = int(255 * opacity)
+
+        draw.text(pos, text, font=font, fill=(rgb[0], rgb[1], rgb[2], alpha_val))
+
+        return Image.alpha_composite(base, txt_layer)
+
+
+# ==============================================================================
+# 10. BATCH PROCESSING ENGINE
+# ==============================================================================
+
+
+class BatchEngine:
+    """Processes multiple image files sequentially and bundles outputs into a ZIP archive."""
+
+    @staticmethod
+    def process_batch(
+        image_list: List[Any],
+        processing_mode: str,
+        bg_option: str,
+        solid_color: str,
+        progress=gr.Progress(track_tqdm=True)
+    ) -> Tuple[List[Image.Image], str, str]:
+        """Iterates over batch inputs, applies transparency, and builds a ZIP download package."""
+        if not image_list:
+            return [], None, "⚠️ No images provided for batch processing."
+
         start_time = time.time()
-        img = Image.fromarray(img_arr).convert("L") # Gray scale
-        img = optimize_image_size(img, max_dim=1024)
+        processed_images: List[Image.Image] = []
+
+        # Create temporary zip archive in memory
+        zip_buffer = io.BytesIO()
+
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            total = len(image_list)
+
+            for idx, img_data in enumerate(image_list):
+                progress((idx + 1) / float(total), desc=f"Processing Image {idx+1}/{total}...")
+
+                try:
+                    # Convert input format
+                    if isinstance(img_data, np.ndarray):
+                        pil_img = ImageUtils.cv2_to_pil(img_data)
+                    elif isinstance(img_data, str):
+                        pil_img = Image.open(img_data)
+                    else:
+                        pil_img = img_data
+
+                    # Apply removal mode
+                    if processing_mode == "AI Neural Removal (rembg)":
+                        fg = neural_engine.remove_background(pil_img, model_name="u2netp")
+                    else:
+                        fg = ChromaKeyEngine.process_keying(pil_img, screen_type="Green Screen")
+
+                    # Composite background
+                    final_img = CompositingEngine.composite_layers(
+                        foreground=fg,
+                        bg_option=bg_option,
+                        solid_hex=solid_color
+                    )
+
+                    processed_images.append(final_img)
+
+                    # Save into ZIP
+                    img_byte_arr = io.BytesIO()
+                    final_img.save(img_byte_arr, format="PNG")
+                    zip_file.writestr(f"shadow_flamez_out_{idx+1:03d}.png", img_byte_arr.getvalue())
+
+                except Exception as e:
+                    logger.error(f"Error processing batch item {idx+1}: {e}")
+
+        zip_buffer.seek(0)
         
-        c1 = np.array(hex_to_rgb(color1_hex), dtype=np.float32)
-        c2 = np.array(hex_to_rgb(color2_hex), dtype=np.float32)
-        
-        gray = np.array(img, dtype=np.float32) / 255.0
-        duotone = np.zeros((img.height, img.width, 3), dtype=np.uint8)
-        
-        for ch in range(3):
-            duotone[:, :, ch] = np.clip((1 - gray) * c1[ch] + gray * c2[ch], 0, 255).astype(np.uint8)
-            
-        elapsed = time.time() - start_time
-        res_arr = duotone
-        del img
-        force_free_memory()
-        return res_arr, f"🎨 Cyber Duotone Mapped in {elapsed:.2f}s | {color1_hex} -> {color2_hex}"
-    except Exception as e:
-        force_free_memory()
-        return None, f"⚠️ Duotone Error: {str(e)}"
+        # Save temporary zip file locally for download
+        zip_path = os.path.join(os.getcwd(), "shadow_flamez_batch_export.zip")
+        with open(zip_path, "wb") as f:
+            f.write(zip_buffer.getvalue())
+
+        elapsed = round(time.time() - start_time, 2)
+        diagnostics.record_task("Batch Processing Task", elapsed, details=f"Processed {len(processed_images)} images")
+
+        status_msg = f"✅ Batch complete! Processed {len(processed_images)} images in {elapsed}s."
+        return processed_images, zip_path, status_msg
 
 
-# Transfer Functions with Auto Tab Switches
-def transfer_to_tab(img, target_tab_id):
-    force_free_memory()
-    return img, gr.Tabs(selected=target_tab_id)
+# ==============================================================================
+# 11. GRADIO INTERFACE EVENT CALLBACK HANDLERS
+# ==============================================================================
 
-# =========================================================
-# 04. GRADIO INTERFACE BUILD
-# =========================================================
-with gr.Blocks(title="Shadow Flamez AI Studio Pro v5", css=CUSTOM_CSS) as app:
-    
-    # Animated Header
-    with gr.Row(elem_id="studio-header"):
-        gr.Markdown(
-            """
-            # SHADOW FLAMEZ AI STUDIO PRO
-            **v5.0 Render Edition** • High-Speed Multitasking Suite • 10 Cyber Engines
-            """
+
+def format_status_badge(message: str, status_type: str = "info") -> str:
+    """Returns styled HTML status badge for UI response headers."""
+    color_map = {
+        "info": "#00ffff",
+        "success": "#00ff66",
+        "warning": "#ffaa00",
+        "error": "#ff0055"
+    }
+    border_col = color_map.get(status_type, "#00ffff")
+    return f'<div class="status-badge" style="border-left-color: {border_col};">⚡ STATUS: {message}</div>'
+
+
+def single_image_pipeline(
+    input_image: Optional[Image.Image],
+    custom_bg_img: Optional[Image.Image],
+    processing_mode: str,
+    bg_option: str,
+    solid_color: str,
+    grad_start: str,
+    grad_end: str,
+    grad_style: str,
+    hue_tol: int,
+    sat_min: int,
+    feather_val: int,
+    spill_suppress: bool,
+    progress=gr.Progress(track_tqdm=True)
+) -> Tuple[Optional[Image.Image], str]:
+    """Primary pipeline handler for Single Image Studio Tab."""
+    if input_image is None:
+        return None, format_status_badge("Please upload a source image first.", "warning")
+
+    start_time = time.time()
+    progress(0.1, desc="Initializing Engine...")
+
+    try:
+        # Step 1: Execute Selected Background Removal Engine
+        progress(0.3, desc=f"Executing {processing_mode}...")
+        if processing_mode == "AI Neural Removal (rembg)":
+            fg = neural_engine.remove_background(
+                pil_image=input_image,
+                model_name="u2netp"
+            )
+        else:
+            fg = ChromaKeyEngine.process_keying(
+                pil_image=input_image,
+                screen_type="Green Screen" if "Green" in processing_mode else "Blue Screen",
+                hue_tolerance=hue_tol,
+                sat_min=sat_min,
+                feather_radius=feather_val,
+                spill_suppression=spill_suppress
+            )
+
+        # Step 2: Composite Background Layer
+        progress(0.7, desc="Applying Background Compositing Layer...")
+        final_output = CompositingEngine.composite_layers(
+            foreground=fg,
+            bg_option=bg_option,
+            solid_hex=solid_color,
+            grad_start_hex=grad_start,
+            grad_end_hex=grad_end,
+            grad_style=grad_style,
+            custom_bg_img=custom_bg_img
         )
 
-    # Main Navigation Tabs
-    with gr.Tabs(selected="tab_comp") as main_tabs:
-        
-        # TOOL 1: Compositor & Background Removal
-        with gr.TabItem("⚡ Background & Cutout", id="tab_comp"):
-            with gr.Row():
-                with gr.Column(scale=1, elem_classes=["cyber-panel"]):
-                    gr.Markdown("### 01. SOURCE & CUTOUT ENGINE")
-                    comp_input = gr.Image(label="Upload Image", type="numpy")
-                    comp_engine = gr.Radio(["⚡ Fast Matrix Keying (< 0.2s)", "🤖 Neural u2netp AI (Cached RAM)"], value="⚡ Fast Matrix Keying (< 0.2s)", label="Cutout Speed Engine")
-                    comp_bg_style = gr.Dropdown(["Transparent", "Solid Color", "Custom Background", "Original"], value="Transparent", label="Background Style")
-                    comp_bg_color = gr.ColorPicker(label="Solid Background Color", value="#030108")
-                    comp_custom_bg = gr.Image(label="Custom Background Image", type="numpy")
-                    comp_shadow = gr.Slider(minimum=0, maximum=100, value=30, label="Drop Shadow Intensity (%)")
-                    
-                    with gr.Accordion("🌐 Optional Colab Tunnel URL (Leave Empty for Render)", open=False):
-                        colab_url_input = gr.Textbox(label="Colab Public Tunnel URL", value="", placeholder="https://xxxx.ngrok-free.app")
-                    
-                    comp_btn = gr.Button("🔥 EXECUTE COMPOSITE", elem_classes=["cyber-btn"])
-                
-                with gr.Column(scale=1, elem_classes=["cyber-panel"]):
-                    gr.Markdown("### 02. LIVE PREVIEW & TELEMETRY")
-                    comp_specs = gr.Textbox(label="Performance Telemetry", value="System Ready...", interactive=False)
-                    
-                    with gr.Tabs(selected="result_subtab") as preview_subtabs:
-                        with gr.TabItem("Composited Result", id="result_subtab"):
-                            comp_output = gr.Image(label="Studio Composite Output", interactive=False)
-                        with gr.TabItem("Alpha Keyed Cutout", id="cutout_subtab"):
-                            cutout_output = gr.Image(label="Transparent Cutout Mask", interactive=False)
-                    
-                    gr.Markdown("#### ⚡ Dynamic One-Click Navigation")
-                    with gr.Row():
-                        send_upscale_btn = gr.Button("➡️ 4K Upscaler", elem_classes=["transfer-btn"])
-                        send_aura_btn = gr.Button("➡️ Neon Aura", elem_classes=["transfer-btn"])
-                        send_watermark_btn = gr.Button("➡️ Watermark", elem_classes=["transfer-btn"])
+        progress(1.0, desc="Rendering Complete!")
+        elapsed = round(time.time() - start_time, 2)
+        diagnostics.record_task("Single Image Pipeline", elapsed, details=f"Mode: {processing_mode}")
 
-        # TOOL 2: 4x AI Upscaler
-        with gr.TabItem("🚀 4x Upscaler", id="tab_upscale"):
-            with gr.Row():
-                with gr.Column(scale=1, elem_classes=["cyber-panel"]):
-                    gr.Markdown("### 01. SUPER-RESOLUTION CONTROLS")
-                    upscale_input = gr.Image(label="Upload Image or Transferred Source", type="numpy")
-                    sharpness_slider = gr.Slider(minimum=1.0, maximum=3.0, value=1.4, step=0.1, label="Edge Sharpness Filter")
-                    color_boost_slider = gr.Slider(minimum=1.0, maximum=2.0, value=1.1, step=0.1, label="Cyber Color Vibrance")
-                    upscale_btn = gr.Button("⚡ UPSCALE 4X NOW", elem_classes=["cyber-btn"])
-                
-                with gr.Column(scale=1, elem_classes=["cyber-panel"]):
-                    gr.Markdown("### 02. HIGH-RES OUTPUT")
-                    upscale_specs = gr.Textbox(label="Upscale Status", value="Awaiting image...", interactive=False)
-                    upscale_output = gr.Image(label="4K Enhanced Output", interactive=False)
+        status_html = format_status_badge(
+            f"Image rendered in {elapsed}s | Mode: {processing_mode} | Compositing: {bg_option}",
+            "success"
+        )
+        return final_output, status_html
 
-        # TOOL 3: Brand Watermark
-        with gr.TabItem("🏷️ Watermark Studio", id="tab_watermark"):
-            with gr.Row():
-                with gr.Column(scale=1, elem_classes=["cyber-panel"]):
-                    gr.Markdown("### 01. WATERMARK CONTROLS")
-                    wm_base = gr.Image(label="Base Image or Transferred Source", type="numpy")
-                    wm_logo = gr.Image(label="Brand Logo / Watermark PNG", type="numpy")
-                    wm_pos = gr.Dropdown(["Bottom Right", "Bottom Left", "Top Right", "Top Left", "Center Tile"], value="Bottom Right", label="Position")
-                    wm_scale = gr.Slider(minimum=5, maximum=60, value=22, label="Scale (%)")
-                    wm_opacity = gr.Slider(minimum=10, maximum=100, value=85, label="Opacity (%)")
-                    wm_rotation = gr.Slider(minimum=-180, maximum=180, value=0, label="Rotation Angle (°)")
-                    wm_btn = gr.Button("🔥 APPLY BRAND STAMP", elem_classes=["cyber-btn"])
-                
-                with gr.Column(scale=1, elem_classes=["cyber-panel"]):
-                    gr.Markdown("### 02. BRANDED OUTPUT")
-                    wm_specs = gr.Textbox(label="Watermark Status", value="Ready", interactive=False)
-                    wm_output = gr.Image(label="Watermarked Output", interactive=False)
+    except Exception as e:
+        logger.error(f"Single Image Pipeline Failure: {e}")
+        diagnostics.record_task("Single Image Pipeline", 0.0, status="ERROR", details=str(e))
+        return None, format_status_badge(f"Error executing task: {str(e)}", "error")
 
-        # TOOL 4: Cyber FX Engine
-        with gr.TabItem("🎨 Cyber FX", id="tab_fx"):
-            with gr.Row():
-                with gr.Column(scale=1, elem_classes=["cyber-panel"]):
-                    gr.Markdown("### 01. CYBER & ANIME PRESETS")
-                    fx_input = gr.Image(label="Upload Image or Transferred Source", type="numpy")
-                    fx_type = gr.Radio(["🔥 Shadow Flame Aura", "🤖 Neon Edge Cyberpunk", "⚡ High-Contrast Dark Glow"], value="🔥 Shadow Flame Aura", label="FX Preset")
-                    fx_intensity = gr.Slider(minimum=10, maximum=100, value=50, label="FX Intensity (%)")
-                    fx_btn = gr.Button("✨ APPLY CYBER FX", elem_classes=["cyber-btn"])
-                
-                with gr.Column(scale=1, elem_classes=["cyber-panel"]):
-                    gr.Markdown("### 02. FX STYLED OUTPUT")
-                    fx_specs = gr.Textbox(label="FX Telemetry", value="Ready", interactive=False)
-                    fx_output = gr.Image(label="Stylized Image", interactive=False)
 
-        # TOOL 5: Neon Energy Aura (NEW)
-        with gr.TabItem("🔥 Neon Energy Aura", id="tab_aura"):
-            with gr.Row():
-                with gr.Column(scale=1, elem_classes=["cyber-panel"]):
-                    gr.Markdown("### 01. AURA STROKE ENGINE")
-                    aura_input = gr.Image(label="Cutout PNG (With Transparency)", type="numpy")
-                    aura_color = gr.ColorPicker(label="Aura Glow Color", value="#FF4500")
-                    aura_radius = gr.Slider(minimum=2, maximum=40, value=15, label="Aura Radius (px)")
-                    aura_blur = gr.Slider(minimum=1, maximum=30, value=10, label="Glow Softness Blur")
-                    aura_btn = gr.Button("🔥 GENERATE NEON AURA", elem_classes=["cyber-btn"])
-                
-                with gr.Column(scale=1, elem_classes=["cyber-panel"]):
-                    gr.Markdown("### 02. AURA OUTPUT")
-                    aura_specs = gr.Textbox(label="Aura Status", value="Ready", interactive=False)
-                    aura_output = gr.Image(label="Subject with Glowing Aura", interactive=False)
+def fx_pipeline(
+    input_image: Optional[Image.Image],
+    brightness: float,
+    contrast: float,
+    saturation: float,
+    sharpness: float,
+    fx_choice: str,
+    glow_color: str,
+    glow_thickness: int
+) -> Tuple[Optional[Image.Image], str]:
+    """Pipeline handler for FX & Color Grading Tab."""
+    if input_image is None:
+        return None, format_status_badge("Please upload an image to apply FX.", "warning")
 
-        # TOOL 6: Canvas & Social Aspect Ratio (NEW)
-        with gr.TabItem("📐 Social Canvas", id="tab_canvas"):
-            with gr.Row():
-                with gr.Column(scale=1, elem_classes=["cyber-panel"]):
-                    gr.Markdown("### 01. ASPECT RATIO & FRAMING")
-                    canvas_input = gr.Image(label="Upload Image", type="numpy")
-                    canvas_ratio = gr.Dropdown(["1:1 Square (Insta/Profile)", "16:9 Landscape (YouTube/Banner)", "9:16 Portrait (Reels/TikTok)", "4:5 Portrait (Insta Post)"], value="16:9 Landscape (YouTube/Banner)", label="Target Aspect Ratio")
-                    canvas_blur = gr.Checkbox(label="Use Blurred Image Background", value=True)
-                    canvas_bg_color = gr.ColorPicker(label="Padding Color (If Blur Off)", value="#05020c")
-                    canvas_btn = gr.Button("📐 FORMAT CANVAS", elem_classes=["cyber-btn"])
-                
-                with gr.Column(scale=1, elem_classes=["cyber-panel"]):
-                    gr.Markdown("### 02. CANVAS OUTPUT")
-                    canvas_specs = gr.Textbox(label="Canvas Status", value="Ready", interactive=False)
-                    canvas_output = gr.Image(label="Formatted Aspect Ratio Image", interactive=False)
+    start_time = time.time()
+    try:
+        # Step 1: Color Adjustments
+        img = ImageEffectsEngine.adjust_colors(
+            input_image, brightness, contrast, saturation, sharpness
+        )
 
-        # TOOL 7: Cyber Glitch & Chromatic Shift (NEW)
-        with gr.TabItem("🎞️ Cyber Glitch", id="tab_glitch"):
-            with gr.Row():
-                with gr.Column(scale=1, elem_classes=["cyber-panel"]):
-                    gr.Markdown("### 01. CHROMATIC SHIFT CONTROLS")
-                    glitch_input = gr.Image(label="Upload Image", type="numpy")
-                    glitch_shift = gr.Slider(minimum=1, maximum=25, value=8, label="RGB Split Shift (px)")
-                    glitch_scanlines = gr.Checkbox(label="Overlay CRT Scanlines", value=True)
-                    glitch_btn = gr.Button("🎞️ APPLY CYBER GLITCH", elem_classes=["cyber-btn"])
-                
-                with gr.Column(scale=1, elem_classes=["cyber-panel"]):
-                    gr.Markdown("### 02. GLITCH OUTPUT")
-                    glitch_specs = gr.Textbox(label="Glitch Status", value="Ready", interactive=False)
-                    glitch_output = gr.Image(label="Glitch Distortion Output", interactive=False)
+        # Step 2: Artistic FX Selection
+        if fx_choice == "Cyberpunk Teal & Pink":
+            img = ImageEffectsEngine.apply_cyberpunk_filter(img)
+        elif fx_choice == "Neon Glow Outline":
+            img = ImageEffectsEngine.apply_neon_outline(img, glow_color, glow_thickness)
 
-        # TOOL 8: Cinematic Lighting & Vignette (NEW)
-        with gr.TabItem("🎭 Cinematic Lighting", id="tab_lighting"):
-            with gr.Row():
-                with gr.Column(scale=1, elem_classes=["cyber-panel"]):
-                    gr.Markdown("### 01. ATMOSPHERIC LIGHTING")
-                    lighting_input = gr.Image(label="Upload Image", type="numpy")
-                    vignette_slider = gr.Slider(minimum=0, maximum=100, value=65, label="Vignette Frame Shadow (%)")
-                    tint_slider = gr.Slider(minimum=-50, maximum=50, value=15, label="Color Tint (Cool Cyber ⬅️ 0 ➡️ Warm Flame)")
-                    lighting_btn = gr.Button("🎭 APPLY LIGHTING", elem_classes=["cyber-btn"])
-                
-                with gr.Column(scale=1, elem_classes=["cyber-panel"]):
-                    gr.Markdown("### 02. LIGHTING OUTPUT")
-                    lighting_specs = gr.Textbox(label="Lighting Status", value="Ready", interactive=False)
-                    lighting_output = gr.Image(label="Cinematic Mood Result", interactive=False)
+        elapsed = round(time.time() - start_time, 2)
+        diagnostics.record_task("FX Pipeline", elapsed, details=f"FX: {fx_choice}")
 
-        # TOOL 9: Banner & Typography Generator (NEW)
-        with gr.TabItem("✏️ Banner Text", id="tab_text"):
-            with gr.Row():
-                with gr.Column(scale=1, elem_classes=["cyber-panel"]):
-                    gr.Markdown("### 01. TYPOGRAPHY CONTROLS")
-                    text_input = gr.Image(label="Upload Image", type="numpy")
-                    text_header = gr.Textbox(label="Header Title", value="SHADOW FLAMEZ")
-                    text_sub = gr.Textbox(label="Subtitle / Tagline", value="PRO NEURAL STUDIO EDITION")
-                    text_color = gr.ColorPicker(label="Title Font Color", value="#00F0FF")
-                    text_plate_op = gr.Slider(minimum=0, maximum=100, value=75, label="Dark Backplate Opacity (%)")
-                    text_pos = gr.Radio(["Top Banner", "Bottom Banner"], value="Bottom Banner", label="Banner Position")
-                    text_btn = gr.Button("✏️ STAMP BANNER TEXT", elem_classes=["cyber-btn"])
-                
-                with gr.Column(scale=1, elem_classes=["cyber-panel"]):
-                    gr.Markdown("### 02. TYPOGRAPHY OUTPUT")
-                    text_specs = gr.Textbox(label="Banner Status", value="Ready", interactive=False)
-                    text_output = gr.Image(label="Banner Output", interactive=False)
+        return img, format_status_badge(f"FX Applied successfully in {elapsed}s!", "success")
 
-        # TOOL 10: Cyber Duotone Gradient Mapper (NEW)
-        with gr.TabItem("🎨 Duotone Palette", id="tab_duotone"):
-            with gr.Row():
-                with gr.Column(scale=1, elem_classes=["cyber-panel"]):
-                    gr.Markdown("### 01. DUOTONE GRADIENT MAP")
-                    duotone_input = gr.Image(label="Upload Image", type="numpy")
-                    duotone_c1 = gr.ColorPicker(label="Shadow / Dark Tone", value="#FF4500") # Flame Orange
-                    duotone_c2 = gr.ColorPicker(label="Highlight / Light Tone", value="#00F0FF") # Cyber Cyan
-                    duotone_btn = gr.Button("🎨 MAP DUOTONE PALETTE", elem_classes=["cyber-btn"])
-                
-                with gr.Column(scale=1, elem_classes=["cyber-panel"]):
-                    gr.Markdown("### 02. DUOTONE OUTPUT")
-                    duotone_specs = gr.Textbox(label="Duotone Status", value="Ready", interactive=False)
-                    duotone_output = gr.Image(label="Duotone Stylized Output", interactive=False)
+    except Exception as e:
+        logger.error(f"FX Pipeline Failure: {e}")
+        return None, format_status_badge(f"FX Processing failed: {str(e)}", "error")
 
-    # Event Bindings
-    comp_btn.click(
-        fn=process_composite,
-        inputs=[comp_input, comp_engine, comp_bg_style, comp_bg_color, comp_custom_bg, comp_shadow, colab_url_input],
-        outputs=[comp_output, cutout_output, comp_specs, preview_subtabs]
-    )
-    
-    upscale_btn.click(fn=process_upscale, inputs=[upscale_input, sharpness_slider, color_boost_slider], outputs=[upscale_output, upscale_specs])
-    wm_btn.click(fn=process_watermark, inputs=[wm_base, wm_logo, wm_pos, wm_scale, wm_opacity, wm_rotation], outputs=[wm_output, wm_specs])
-    fx_btn.click(fn=process_cyber_fx, inputs=[fx_input, fx_type, fx_intensity], outputs=[fx_output, fx_specs])
-    aura_btn.click(fn=process_energy_aura, inputs=[aura_input, aura_color, aura_radius, aura_blur], outputs=[aura_output, aura_specs])
-    canvas_btn.click(fn=process_canvas_resize, inputs=[canvas_input, canvas_ratio, canvas_bg_color, canvas_blur], outputs=[canvas_output, canvas_specs])
-    glitch_btn.click(fn=process_glitch_effect, inputs=[glitch_input, glitch_shift, glitch_scanlines], outputs=[glitch_output, glitch_specs])
-    lighting_btn.click(fn=process_cinematic_vignette, inputs=[lighting_input, vignette_slider, tint_slider], outputs=[lighting_output, lighting_specs])
-    text_btn.click(fn=process_text_overlay, inputs=[text_input, text_header, text_sub, text_color, text_plate_op, text_pos], outputs=[text_output, text_specs])
-    duotone_btn.click(fn=process_duotone_palette, inputs=[duotone_input, duotone_c1, duotone_c2], outputs=[duotone_output, duotone_specs])
 
-    # Transfer Buttons
-    send_upscale_btn.click(fn=lambda img: transfer_to_tab(img, "tab_upscale"), inputs=[comp_output], outputs=[upscale_input, main_tabs])
-    send_aura_btn.click(fn=lambda img: transfer_to_tab(img, "tab_aura"), inputs=[cutout_output], outputs=[aura_input, main_tabs])
-    send_watermark_btn.click(fn=lambda img: transfer_to_tab(img, "tab_watermark"), inputs=[comp_output], outputs=[wm_base, main_tabs])
+def watermark_pipeline(
+    input_image: Optional[Image.Image],
+    text: str,
+    position: str,
+    opacity: float,
+    font_size: int,
+    text_color: str
+) -> Tuple[Optional[Image.Image], str]:
+    """Pipeline handler for Branding & Watermark Tab."""
+    if input_image is None:
+        return None, format_status_badge("Upload an image first.", "warning")
+
+    try:
+        res = WatermarkEngine.apply_text_watermark(
+            image=input_image,
+            text=text,
+            position=position,
+            opacity=opacity,
+            font_size=font_size,
+            text_color=text_color
+        )
+        return res, format_status_badge("Watermark applied successfully!", "success")
+    except Exception as e:
+        return None, format_status_badge(f"Watermark failure: {str(e)}", "error")
+
+
+# ==============================================================================
+# 12. MAIN GRADIO BLOCKS APPLICATION BUILDER
+# ==============================================================================
+
+def build_studio_app() -> gr.Blocks:
+    """Constructs the multi-tab Gradio UI Blocks Application."""
+
+    with gr.Blocks(title="Shadow Flamez AI Studio Pro v5.0", css=STUDIO_CSS, theme=gr.themes.Slate()) as demo:
+
+        # Header Hero Banner
+        gr.HTML(STUDIO_HEADER_HTML)
+
+        # Studio Tabs
+        with gr.Tabs():
+
+            # ------------------------------------------------------------------
+            # TAB 1: SINGLE IMAGE STUDIO
+            # ------------------------------------------------------------------
+            with gr.Tab("🔥 Single Image Studio"):
+                with gr.Row():
+                    # Control Column (Left)
+                    with gr.Column(scale=1):
+                        gr.Markdown("### 📥 Source Input & Removal Engine")
+                        input_img = gr.Image(
+                            type="pil",
+                            label="Upload Source Image",
+                            sources=["upload", "clipboard", "webcam"]
+                        )
+
+                        proc_mode = gr.Radio(
+                            choices=[
+                                "AI Neural Removal (rembg)",
+                                "Fast Green Screen Keying",
+                                "Fast Blue Screen Keying"
+                            ],
+                            value="AI Neural Removal (rembg)",
+                            label="⚙️ Processing Engine"
+                        )
+
+                        with gr.Accordion("🎛️ Chroma Key Fine-Tuning Controls", open=False):
+                            hue_tol = gr.Slider(5, 40, value=15, step=1, label="Hue Tolerance")
+                            sat_min = gr.Slider(10, 150, value=40, step=5, label="Min Saturation Threshold")
+                            feather_slider = gr.Slider(0, 10, value=2, step=1, label="Edge Feathering Radius")
+                            spill_suppress = gr.Checkbox(value=True, label="Enable Spill Suppression")
+
+                        gr.Markdown("### 🎨 Background Compositing")
+                        bg_style = gr.Radio(
+                            choices=[
+                                "Checkerboard Preview",
+                                "Transparent (PNG)",
+                                "Solid Custom Color",
+                                "Gradient Color",
+                                "Custom Background Image"
+                            ],
+                            value="Checkerboard Preview",
+                            label="Background Mode"
+                        )
+
+                        with gr.Accordion("🖌️ Custom Background Settings", open=True):
+                            solid_picker = gr.ColorPicker(value="#0F3460", label="Solid Color Picker")
+
+                            with gr.Row():
+                                grad_start_picker = gr.ColorPicker(value="#FF0055", label="Gradient Start")
+                                grad_end_picker = gr.ColorPicker(value="#00FFFF", label="Gradient End")
+
+                            grad_style_dropdown = gr.Dropdown(
+                                choices=["Linear Diagonal", "Linear Vertical", "Linear Horizontal"],
+                                value="Linear Diagonal",
+                                label="Gradient Angle"
+                            )
+
+                            custom_bg_upload = gr.Image(
+                                type="pil",
+                                label="Upload Custom Background Image",
+                                sources=["upload"]
+                            )
+
+                        btn_process = gr.Button("🔥 EXECUTE STUDIO RENDER", variant="primary", size="lg")
+
+                    # Output Column (Right)
+                    with gr.Column(scale=1):
+                        gr.Markdown("### 📤 Studio Render Result")
+                        status_box = gr.HTML(format_status_badge("System Ready. Upload an image to start.", "info"))
+                        output_img = gr.Image(type="pil", label="Rendered Output", format="png", interactive=False)
+
+                # Connect Event Handler
+                btn_process.click(
+                    fn=single_image_pipeline,
+                    inputs=[
+                        input_img, custom_bg_upload, proc_mode, bg_style,
+                        solid_picker, grad_start_picker, grad_end_picker,
+                        grad_style_dropdown, hue_tol, sat_min, feather_slider, spill_suppress
+                    ],
+                    outputs=[output_img, status_box]
+                )
+
+            # ------------------------------------------------------------------
+            # TAB 2: FX & COLOR GRADING STUDIO
+            # ------------------------------------------------------------------
+            with gr.Tab("✨ FX & Color Studio"):
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        gr.Markdown("### 🎛️ Color Adjustments & Filters")
+                        fx_input_img = gr.Image(type="pil", label="Upload Image for FX")
+
+                        bright_slider = gr.Slider(0.5, 2.0, value=1.0, step=0.05, label="Brightness")
+                        contrast_slider = gr.Slider(0.5, 2.0, value=1.0, step=0.05, label="Contrast")
+                        sat_slider = gr.Slider(0.0, 2.5, value=1.0, step=0.05, label="Saturation")
+                        sharp_slider = gr.Slider(0.0, 3.0, value=1.0, step=0.1, label="Sharpness")
+
+                        fx_preset = gr.Radio(
+                            choices=["None", "Cyberpunk Teal & Pink", "Neon Glow Outline"],
+                            value="None",
+                            label="Artistic Preset FX"
+                        )
+
+                        with gr.Accordion("🚨 Neon Glow Settings", open=False):
+                            glow_color_picker = gr.ColorPicker(value="#00FFFF", label="Glow Color")
+                            glow_thick_slider = gr.Slider(1, 15, value=5, step=1, label="Glow Thickness")
+
+                        btn_fx = gr.Button("✨ APPLY FX & FILTERS", variant="primary")
+
+                    with gr.Column(scale=1):
+                        gr.Markdown("### 📤 Filtered Result")
+                        fx_status = gr.HTML(format_status_badge("FX Engine Ready.", "info"))
+                        fx_output_img = gr.Image(type="pil", label="FX Output", format="png")
+
+                btn_fx.click(
+                    fn=fx_pipeline,
+                    inputs=[
+                        fx_input_img, bright_slider, contrast_slider,
+                        sat_slider, sharp_slider, fx_preset,
+                        glow_color_picker, glow_thick_slider
+                    ],
+                    outputs=[fx_output_img, fx_status]
+                )
+
+            # ------------------------------------------------------------------
+            # TAB 3: BRANDING & WATERMARK STUDIO
+            # ------------------------------------------------------------------
+            with gr.Tab("🏷️ Branding & Watermark"):
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        gr.Markdown("### ✍️ Watermark Settings")
+                        wm_input_img = gr.Image(type="pil", label="Upload Image")
+
+                        wm_text = gr.Textbox(value="SHADOW FLAMEZ STUDIO", label="Watermark Text")
+                        wm_pos = gr.Dropdown(
+                            choices=["Top Left", "Top Right", "Center", "Bottom Left", "Bottom Right"],
+                            value="Bottom Right",
+                            label="Overlay Position"
+                        )
+                        wm_opacity = gr.Slider(0.1, 1.0, value=0.7, step=0.05, label="Opacity")
+                        wm_size = gr.Slider(12, 72, value=32, step=2, label="Font Size")
+                        wm_color = gr.ColorPicker(value="#FFFFFF", label="Text Color")
+
+                        btn_wm = gr.Button("🏷️ APPLY WATERMARK", variant="primary")
+
+                    with gr.Column(scale=1):
+                        gr.Markdown("### 📤 Branded Output")
+                        wm_status = gr.HTML(format_status_badge("Watermark Engine Ready.", "info"))
+                        wm_output_img = gr.Image(type="pil", label="Watermarked Output")
+
+                btn_wm.click(
+                    fn=watermark_pipeline,
+                    inputs=[wm_input_img, wm_text, wm_pos, wm_opacity, wm_size, wm_color],
+                    outputs=[wm_output_img, wm_status]
+                )
+
+            # ------------------------------------------------------------------
+            # TAB 4: BATCH PROCESSING STUDIO
+            # ------------------------------------------------------------------
+            with gr.Tab("📦 Batch Processing"):
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        gr.Markdown("### 📁 Batch Upload Queue")
+                        batch_files = gr.File(file_count="multiple", label="Upload Multiple Images")
+
+                        batch_mode = gr.Radio(
+                            choices=["AI Neural Removal (rembg)", "Fast Green Screen Keying"],
+                            value="AI Neural Removal (rembg)",
+                            label="Batch Removal Mode"
+                        )
+
+                        batch_bg = gr.Radio(
+                            choices=["Transparent (PNG)", "Checkerboard Preview", "Solid Custom Color"],
+                            value="Transparent (PNG)",
+                            label="Batch Background"
+                        )
+                        batch_color = gr.ColorPicker(value="#0F3460", label="Solid Background Color")
+
+                        btn_batch = gr.Button("📦 PROCESS BATCH QUEUE", variant="primary", size="lg")
+
+                    with gr.Column(scale=1):
+                        gr.Markdown("### 📤 Batch Output Gallery & Download")
+                        batch_status = gr.HTML(format_status_badge("Batch Queue Empty.", "info"))
+                        batch_gallery = gr.Gallery(label="Batch Output Gallery", columns=3)
+                        batch_zip_file = gr.File(label="Download Processed ZIP Archive")
+
+                btn_batch.click(
+                    fn=BatchEngine.process_batch,
+                    inputs=[batch_files, batch_mode, batch_bg, batch_color],
+                    outputs=[batch_gallery, batch_zip_file, batch_status]
+                )
+
+            # ------------------------------------------------------------------
+            # TAB 5: SYSTEM DIAGNOSTICS & ANALYTICS
+            # ------------------------------------------------------------------
+            with gr.Tab("📊 System Diagnostics"):
+                gr.Markdown("### 📈 Real-Time Diagnostics & Performance Metrics")
+                diag_html = gr.HTML(diagnostics.generate_report_html())
+                btn_refresh_diag = gr.Button("🔄 REFRESH DIAGNOSTICS")
+
+                btn_refresh_diag.click(
+                    fn=lambda: diagnostics.generate_report_html(),
+                    inputs=[],
+                    outputs=[diag_html]
+                )
+
+        # Footer
+        gr.HTML(STUDIO_FOOTER_HTML)
+
+    return demo
+
+
+# ==============================================================================
+# 13. APPLICATION ENTRY POINT
+# ==============================================================================
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 7860))
-    app.queue(default_concurrency_limit=8).launch(server_name="0.0.0.0", server_port=port)
+    logger.info("Initializing Shadow Flamez AI Studio Pro v5.0...")
+    app = build_studio_app()
+    app.launch(
+        server_name="0.0.0.0",
+        server_port=7860,
+        show_error=True,
+        share=False
+    )

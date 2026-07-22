@@ -1,6 +1,8 @@
-gradio
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+torchvision
 rembg
-onnxruntime
+gradio
 opencv-python-headless
 pillow
 numpy

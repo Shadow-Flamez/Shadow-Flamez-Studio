@@ -533,11 +533,10 @@ class CheckerboardGenerator:
 
 
 class NeuralEngine:
-    """Encapsulates RemBG session models with caching & fallback management."""
+    """Encapsulates RemBG session models with automatic fallback detection."""
 
     def __init__(self):
         self.sessions: Dict[str, Any] = {}
-        # Pre-load primary model
         self._get_session("u2net")
 
     def _get_session(self, model_name: str):
@@ -560,7 +559,7 @@ class NeuralEngine:
         foreground_threshold: int = 240,
         background_threshold: int = 10
     ) -> Image.Image:
-        """Performs AI neural background removal returning a 4-channel RGBA PIL Image."""
+        """Performs AI neural background removal with smart threshold fallback."""
         session = self._get_session(model_name)
 
         output = remove(
@@ -570,11 +569,22 @@ class NeuralEngine:
             alpha_matting_foreground_threshold=foreground_threshold,
             alpha_matting_background_threshold=background_threshold
         )
-        return ImageUtils.ensure_rgba(output)
+        output_rgba = ImageUtils.ensure_rgba(output)
 
+        # Validate if alpha channel was actually created
+        alpha_arr = np.array(output_rgba.split()[3])
+        if np.min(alpha_arr) == 255:  # Mask is completely solid / failed
+            logger.warning("Neural Engine returned solid mask. Executing adaptive contour fallback...")
+            cv_img = ImageUtils.pil_to_cv2(pil_image)
+            gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
+            blur = cv2.GaussianBlur(gray, (5, 5), 0)
+            _, mask = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 
-neural_engine = NeuralEngine()
+            b, g, r = cv2.split(cv_img)
+            rgba_fallback = cv2.merge([b, g, r, mask])
+            return ImageUtils.cv2_to_pil(rgba_fallback)
 
+        return output_rgba
 # ==============================================================================
 # 6. OPENCV FAST CHROMA KEYING ENGINE (GREEN/BLUE SCREEN)
 # ==============================================================================
@@ -726,7 +736,7 @@ class ImageEffectsEngine:
         radius = np.sqrt(xx**2 + yy**2)
 
         vignette_mask = np.clip(1.0 - (radius * intensity), 0, 1)
-        
+
         np_img = np.array(rgba, dtype=np.float32)
         np_img[:, :, 0] *= vignette_mask
         np_img[:, :, 1] *= vignette_mask
@@ -740,34 +750,41 @@ class ImageEffectsEngine:
         glow_color: str = "#00FFFF",
         thickness: int = 5
     ) -> Image.Image:
-        """Generates a glowing backlit neon outline around alpha subject boundaries."""
+        """Generates a glowing backlit neon outline around alpha cutouts OR full photo subjects."""
         rgba = ImageUtils.ensure_rgba(pil_image)
         alpha = rgba.split()[3]
-
-        # Extract edge contour from alpha channel
         alpha_np = np.array(alpha)
-        edges = cv2.Canny(alpha_np, 100, 200)
 
+        # Check if the image has a transparent background or is fully opaque
+        if np.max(alpha_np) == np.min(alpha_np):
+            # OPAQUE IMAGE FALLBACK: Detect features & subjects via Grayscale Canny
+            gray = cv2.cvtColor(np.array(rgba.convert("RGB")), cv2.COLOR_RGB2GRAY)
+            gray_blur = cv2.GaussianBlur(gray, (5, 5), 0)
+            edges = cv2.Canny(gray_blur, 50, 150)
+        else:
+            # TRANSPARENT CUTOUT: Detect subject perimeter directly from Alpha channel
+            edges = cv2.Canny(alpha_np, 100, 200)
+
+        # Expand outline thickness for prominent glow
         if thickness > 1:
             kernel = np.ones((thickness, thickness), np.uint8)
             edges = cv2.dilate(edges, kernel, iterations=1)
 
-        # Smooth edge glow
-        edges_blur = cv2.GaussianBlur(edges, (15, 15), 0)
+        # Gaussian blur for soft aura spread
+        edges_blur = cv2.GaussianBlur(edges, (21, 21), 0)
 
-        # Colorize edge glow
+        # Colorize aura layer
         hex_val = glow_color.lstrip('#')
         gr_col = tuple(int(hex_val[i:i+2], 16) for i in (0, 2, 4))
 
         glow_bg = np.zeros((rgba.height, rgba.width, 4), dtype=np.uint8)
-        glow_bg[edges_blur > 10] = [gr_col[0], gr_col[1], gr_col[2], 255]
+        glow_bg[edges_blur > 5] = [gr_col[0], gr_col[1], gr_col[2], 255]
 
-        glow_pil = Image.fromarray(glow_bg).filter(ImageFilter.GaussianBlur(3))
+        # Multi-pass Gaussian blur to create smooth aura diffusion
+        glow_pil = Image.fromarray(glow_bg).filter(ImageFilter.GaussianBlur(6))
 
-        # Composite original subject over glow outline
+        # Composite original subject over the newly created glow outline
         return Image.alpha_composite(glow_pil, rgba)
-
-
 # ==============================================================================
 # 8. COMPOSITING & BACKGROUND REPLACEMENT ENGINE
 # ==============================================================================

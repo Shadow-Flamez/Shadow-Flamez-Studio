@@ -314,8 +314,8 @@ class NeuralEngine:
 
     def __init__(self):
         self.sessions: Dict[str, Any] = {}
-        # Pre-load lightweight model for zero latency
-        self._get_session("u2netp")
+        # Pre-load full precision u2net model for maximum accuracy
+        self._get_session("u2net")
 
     def _get_session(self, model_name: str):
         if model_name not in self.sessions:
@@ -323,16 +323,16 @@ class NeuralEngine:
             try:
                 self.sessions[model_name] = new_session(model_name)
             except Exception as e:
-                logger.error(f"Failed to load model {model_name}: {e}. Falling back to u2netp.")
-                if "u2netp" not in self.sessions:
-                    self.sessions["u2netp"] = new_session("u2netp")
-                return self.sessions["u2netp"]
+                logger.error(f"Failed to load model {model_name}: {e}. Falling back to u2net.")
+                if "u2net" not in self.sessions:
+                    self.sessions["u2net"] = new_session("u2net")
+                return self.sessions["u2net"]
         return self.sessions[model_name]
 
     def remove_background(
         self,
         pil_image: Image.Image,
-        model_name: str = "u2netp",
+        model_name: str = "u2net",
         alpha_matting: bool = False,
         foreground_threshold: int = 240,
         background_threshold: int = 10
@@ -702,7 +702,7 @@ class BatchEngine:
 
                     # Apply removal mode
                     if processing_mode == "AI Neural Removal (rembg)":
-                        fg = neural_engine.remove_background(pil_img, model_name="u2netp")
+                        fg = neural_engine.remove_background(pil_img, model_name="u2net")
                     else:
                         fg = ChromaKeyEngine.process_keying(pil_img, screen_type="Green Screen")
 
@@ -758,6 +758,7 @@ def single_image_pipeline(
     input_image: Optional[Image.Image],
     custom_bg_img: Optional[Image.Image],
     processing_mode: str,
+    ai_model_name: str,
     bg_option: str,
     solid_color: str,
     grad_start: str,
@@ -782,7 +783,7 @@ def single_image_pipeline(
         if processing_mode == "AI Neural Removal (rembg)":
             fg = neural_engine.remove_background(
                 pil_image=input_image,
-                model_name="u2netp"
+                model_name=ai_model_name
             )
         else:
             fg = ChromaKeyEngine.process_keying(
@@ -808,10 +809,10 @@ def single_image_pipeline(
 
         progress(1.0, desc="Rendering Complete!")
         elapsed = round(time.time() - start_time, 2)
-        diagnostics.record_task("Single Image Pipeline", elapsed, details=f"Mode: {processing_mode}")
+        diagnostics.record_task("Single Image Pipeline", elapsed, details=f"Mode: {processing_mode} ({ai_model_name})")
 
         status_html = format_status_badge(
-            f"Image rendered in {elapsed}s | Mode: {processing_mode} | Compositing: {bg_option}",
+            f"Image rendered in {elapsed}s | Mode: {processing_mode} ({ai_model_name}) | Compositing: {bg_option}",
             "success"
         )
         return final_output, status_html
@@ -924,6 +925,16 @@ def build_studio_app() -> gr.Blocks:
                             label="⚙️ Processing Engine"
                         )
 
+                        ai_model_choice = gr.Dropdown(
+                            choices=[
+                                "u2net",
+                                "isnet-general-use",
+                                "u2netp"
+                            ],
+                            value="u2net",
+                            label="🧠 AI Model Selection (Use u2net for detailed cutouts)"
+                        )
+
                         with gr.Accordion("🎛️ Chroma Key Fine-Tuning Controls", open=False):
                             hue_tol = gr.Slider(5, 40, value=15, step=1, label="Hue Tolerance")
                             sat_min = gr.Slider(10, 150, value=40, step=5, label="Min Saturation Threshold")
@@ -974,7 +985,7 @@ def build_studio_app() -> gr.Blocks:
                 btn_process.click(
                     fn=single_image_pipeline,
                     inputs=[
-                        input_img, custom_bg_upload, proc_mode, bg_style,
+                        input_img, custom_bg_upload, proc_mode, ai_model_choice, bg_style,
                         solid_picker, grad_start_picker, grad_end_picker,
                         grad_style_dropdown, hue_tol, sat_min, feather_slider, spill_suppress
                     ],
@@ -1109,10 +1120,6 @@ def build_studio_app() -> gr.Blocks:
 
     return demo
 
-
-# ==============================================================================
-# 13. APPLICATION ENTRY POINT
-# ==============================================================================
 
 # ==============================================================================
 # 13. APPLICATION ENTRY POINT

@@ -9,10 +9,18 @@ Description: Fully optimized, highly scalable Gradio Studio Application for AI
 ================================================================================
 """
 
+# ==============================================================================
+# 0. ENVIRONMENT & HARDWARE ACCELERATION CONFIGURATION
+# ==============================================================================
 import os
-os.environ["ORT_LOGGING_LEVEL"] = "3"  # Suppresses ONNX non-fatal warnings
+
+# Set environment variables immediately before any heavy C/C++ libraries import
+os.environ["ORT_LOGGING_LEVEL"] = "3"  # Suppress ONNX non-fatal C++ warnings
+os.environ["ONNXRUNTIME_EXECUTION_PROVIDERS"] = "[CPUExecutionProvider]"  # Force clean CPU execution on cloud containers
 os.environ["GRADIO_SERVER_NAME"] = "0.0.0.0"
 os.environ["GRADIO_SERVER_PORT"] = os.environ.get("PORT", "10000")
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
 
 import sys
 import time
@@ -84,7 +92,6 @@ class DiagnosticsManager:
             if self.metrics_history else 0.0
         )
         
-        # Calculate memory footprint estimate
         success_rate = (
             (sum(1 for m in self.metrics_history if m.status == "SUCCESS") / len(self.metrics_history) * 100)
             if self.metrics_history else 100.0
@@ -534,11 +541,11 @@ class CheckerboardGenerator:
 
 
 class NeuralEngine:
-    """Encapsulates RemBG session models with automatic fallback detection."""
+    """Encapsulates RemBG session models with lazy initialization for fast container boot times."""
 
     def __init__(self):
         self.sessions: Dict[str, Any] = {}
-        self._get_session("u2net")
+        # Lazy loading: Do NOT initialize session in __init__ to prevent cloud timeouts during port scanning!
 
     def _get_session(self, model_name: str):
         if model_name not in self.sessions:
@@ -586,6 +593,11 @@ class NeuralEngine:
             return ImageUtils.cv2_to_pil(rgba_fallback)
 
         return output_rgba
+
+
+# Instantiate global neural engine handler (Lazy loaded)
+neural_engine = NeuralEngine()
+
 # ==============================================================================
 # 6. OPENCV FAST CHROMA KEYING ENGINE (GREEN/BLUE SCREEN)
 # ==============================================================================
@@ -786,6 +798,8 @@ class ImageEffectsEngine:
 
         # Composite original subject over the newly created glow outline
         return Image.alpha_composite(glow_pil, rgba)
+
+
 # ==============================================================================
 # 8. COMPOSITING & BACKGROUND REPLACEMENT ENGINE
 # ==============================================================================
@@ -1413,5 +1427,14 @@ def build_studio_app() -> gr.Blocks:
 # ==============================================================================
 
 if __name__ == "__main__":
+    logger.info("Initializing Shadow Flamez Studio UI Blocks...")
+    demo = build_studio_app()
+    
     port = int(os.environ.get("PORT", 10000))
-    demo.launch(server_name="0.0.0.0", server_port=port)
+    logger.info(f"Launching Gradio Server on 0.0.0.0:{port}...")
+    
+    demo.launch(
+        server_name="0.0.0.0",
+        server_port=port,
+        show_error=True
+    )

@@ -1,11 +1,6 @@
-# --- Core UI & Server Framework ---
-gradio>=4.20.0
-
-# --- AI & Background Removal Engines ---
-rembg>=2.0.50
-onnxruntime>=1.16.0
-
-# --- Computer Vision & Image Processing ---
-opencv-python-headless>=4.8.0
-Pillow>=10.0.0
-numpy>=1.24.0
+gradio
+rembg
+onnxruntime
+opencv-python-headless
+pillow
+numpy

@@ -1,21 +1,23 @@
 """
 ================================================================================
-                    SHADOW FLAMEZ AI STUDIO PRO V5.0
-               Enterprise Transparency & Image Engine
+                SHADOW FLAMEZ AI STUDIO PRO V5.0 (ENTERPRISE EDITION)
+               Neural AI Transparency, Compositing & FX Engine
 ================================================================================
-Description: Comprehensive Gradio Studio Application for AI Neural Background
-             Removal, HSV Chroma Keying, FX Filtering, Watermarking, and Batch
-             Processing. Built with OpenCV, PIL, RemBG, and Gradio.
+Description: Fully optimized, highly scalable Gradio Studio Application for AI
+             Neural Background Removal, HSV Chroma Keying, FX Filtering,
+             Watermarking, Real-time Diagnostics, and Batch Processing.
 ================================================================================
 """
 
 import os
 os.environ["GRADIO_SERVER_NAME"] = "0.0.0.0"
 os.environ["GRADIO_SERVER_PORT"] = os.environ.get("PORT", "10000")
+
 import sys
 import time
 import math
 import io
+import gc
 import zipfile
 import logging
 from typing import Tuple, List, Optional, Dict, Union, Any
@@ -51,7 +53,7 @@ class PerformanceMetric:
 
 
 class DiagnosticsManager:
-    """Manages system metrics, performance history, and diagnostic logging."""
+    """Manages system metrics, performance history, memory tracking, and diagnostic logging."""
     def __init__(self):
         self.metrics_history: List[PerformanceMetric] = []
         self.total_processed_count: int = 0
@@ -80,19 +82,44 @@ class DiagnosticsManager:
             sum(m.execution_time for m in self.metrics_history) / len(self.metrics_history)
             if self.metrics_history else 0.0
         )
+        
+        # Calculate memory footprint estimate
+        success_rate = (
+            (sum(1 for m in self.metrics_history if m.status == "SUCCESS") / len(self.metrics_history) * 100)
+            if self.metrics_history else 100.0
+        )
+
         html = f"""
-        <div style="background: #12121a; border: 1px solid #2a2a3d; padding: 15px; border-radius: 10px; color: #e0e0e0; font-family: monospace;">
-            <h4 style="color: #00ffff; margin-top: 0;">📊 System Health & Analytics</h4>
-            <p>⏱️ <b>System Uptime:</b> {self.get_uptime()}</p>
-            <p>🖼️ <b>Total Images Processed:</b> {self.total_processed_count}</p>
-            <p>⚡ <b>Average Processing Time:</b> {avg_time:.2f} seconds</p>
-            <hr style="border: 0; border-top: 1px solid #333;">
-            <h5 style="color: #ff0055; margin-bottom: 5px;">Execution Log (Last 5 Tasks):</h5>
-            <ul style="padding-left: 20px; font-size: 0.9em;">
+        <div class="diag-container">
+            <div class="diag-header">
+                <h4>📊 System Health & Performance Analytics</h4>
+                <span class="diag-badge">OPERATIONAL</span>
+            </div>
+            <div class="diag-grid">
+                <div class="diag-card">
+                    <span class="diag-label">⏱️ System Uptime</span>
+                    <span class="diag-value">{self.get_uptime()}</span>
+                </div>
+                <div class="diag-card">
+                    <span class="diag-label">🖼️ Total Processed</span>
+                    <span class="diag-value">{self.total_processed_count} Images</span>
+                </div>
+                <div class="diag-card">
+                    <span class="diag-label">⚡ Avg Latency</span>
+                    <span class="diag-value">{avg_time:.2f}s</span>
+                </div>
+                <div class="diag-card">
+                    <span class="diag-label">🎯 Success Rate</span>
+                    <span class="diag-value">{success_rate:.1f}%</span>
+                </div>
+            </div>
+            <hr class="diag-divider">
+            <h5 style="color: #ff0055; margin-bottom: 10px;">📋 Execution Log (Last 8 Tasks):</h5>
+            <ul class="diag-log-list">
         """
-        for m in reversed(self.metrics_history[-5:]):
+        for m in reversed(self.metrics_history[-8:]):
             color = "#00ff66" if m.status == "SUCCESS" else "#ff0055"
-            html += f'<li><span style="color:{color};">[{m.timestamp}]</span> <b>{m.task_name}</b> - {m.execution_time:.2f}s ({m.details})</li>'
+            html += f'<li><span style="color:{color};">[{m.timestamp}]</span> <b>{m.task_name}</b> - {m.execution_time:.2f}s <span style="opacity:0.7">({m.details})</span></li>'
         html += "</ul></div>"
         return html
 
@@ -100,13 +127,14 @@ class DiagnosticsManager:
 diagnostics = DiagnosticsManager()
 
 # ==============================================================================
-# 2. BRANDING & UI STYLING CONSTANTS (CSS, SVG, HTML TEMPLATES)
+# 2. BRANDING & BACKLIT ANIMATED UI CSS STYLING
 # ==============================================================================
 
 STUDIO_CSS = """
+/* Keyframe Animations */
 @keyframes neon-pulse {
     0% { filter: drop-shadow(0 0 5px #ff0055) drop-shadow(0 0 15px #ff0055); }
-    50% { filter: drop-shadow(0 0 18px #00ffff) drop-shadow(0 0 35px #7a00ff); }
+    50% { filter: drop-shadow(0 0 20px #00ffff) drop-shadow(0 0 35px #7a00ff); }
     100% { filter: drop-shadow(0 0 5px #ff0055) drop-shadow(0 0 15px #ff0055); }
 }
 
@@ -116,94 +144,290 @@ STUDIO_CSS = """
     100% { background-position: 0% 50%; }
 }
 
-@keyframes border-glow {
-    0% { border-color: #ff0055; }
-    50% { border-color: #00ffff; }
-    100% { border-color: #ff0055; }
+@keyframes backlit-pulse {
+    0% { box-shadow: 0 0 15px rgba(255, 0, 85, 0.4), 0 0 30px rgba(0, 255, 255, 0.2); }
+    50% { box-shadow: 0 0 25px rgba(0, 255, 255, 0.6), 0 0 50px rgba(122, 0, 255, 0.4); }
+    100% { box-shadow: 0 0 15px rgba(255, 0, 85, 0.4), 0 0 30px rgba(0, 255, 255, 0.2); }
 }
 
+@keyframes float-gentle {
+    0% { transform: translateY(0px); }
+    50% { transform: translateY(-4px); }
+    100% { transform: translateY(0px); }
+}
+
+/* Global Container Improvements */
+.gradio-container {
+    background: #08080e !important;
+    font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important;
+}
+
+/* Backlit Hover Effects on Buttons */
+button.primary, .gr-button-primary {
+    background: linear-gradient(135deg, #ff0055, #7a00ff) !important;
+    border: 1px solid #ff0055 !important;
+    color: #ffffff !important;
+    font-weight: 700 !important;
+    letter-spacing: 1px !important;
+    transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1) !important;
+    position: relative !important;
+    overflow: hidden !important;
+    border-radius: 10px !important;
+}
+
+button.primary:hover, .gr-button-primary:hover {
+    transform: translateY(-2px) scale(1.01) !important;
+    background: linear-gradient(135deg, #ff0066, #00ffff) !important;
+    border-color: #00ffff !important;
+    box-shadow: 0 0 25px rgba(0, 255, 255, 0.8), 0 0 50px rgba(255, 0, 85, 0.6), inset 0 0 15px rgba(255, 255, 255, 0.4) !important;
+}
+
+button.secondary, .gr-button-secondary {
+    background: #141424 !important;
+    border: 1px solid #2e2e4d !important;
+    color: #00ffff !important;
+    transition: all 0.35s ease !important;
+    border-radius: 10px !important;
+}
+
+button.secondary:hover, .gr-button-secondary:hover {
+    border-color: #00ffff !important;
+    box-shadow: 0 0 20px rgba(0, 255, 255, 0.4) !important;
+    transform: translateY(-2px) !important;
+}
+
+/* Cards & Panel Backlit Hover FX */
+.gr-box, .gr-block, .gr-card, .gr-panel, .gr-form {
+    background: #0e0e18 !important;
+    border: 1px solid #1f1f35 !important;
+    border-radius: 14px !important;
+    transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+.gr-box:hover, .gr-block:hover, .gr-card:hover, .gr-panel:hover {
+    border-color: rgba(0, 255, 255, 0.4) !important;
+    box-shadow: 0 0 20px rgba(0, 255, 255, 0.15), 0 0 40px rgba(122, 0, 255, 0.1) !important;
+}
+
+/* Interactive Image Components Backlit FX */
+.gr-image, .gradio-image {
+    border-radius: 12px !important;
+    transition: all 0.4s ease !important;
+}
+
+.gr-image:hover, .gradio-image:hover {
+    box-shadow: 0 0 30px rgba(0, 255, 255, 0.35), 0 0 15px rgba(255, 0, 85, 0.25) !important;
+    border-color: #00ffff !important;
+}
+
+/* Header Styling */
 .studio-header {
-    background: linear-gradient(-45deg, #0a0a0f, #141428, #1a0f2e, #0f243a);
+    background: linear-gradient(-45deg, #07070c, #121226, #1b0c2e, #0c1d2e);
     background-size: 400% 400%;
     animation: gradient-shift 12s ease infinite;
-    padding: 30px;
-    border-radius: 16px;
+    padding: 35px 25px;
+    border-radius: 20px;
     border: 1px solid #2e2e4a;
     text-align: center;
     margin-bottom: 25px;
-    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+    box-shadow: 0 15px 50px rgba(0, 0, 0, 0.8), inset 0 0 20px rgba(0, 255, 255, 0.1);
+    position: relative;
+}
+
+.studio-header:hover {
+    animation: gradient-shift 8s ease infinite, backlit-pulse 4s infinite alternate;
 }
 
 .logo-container {
     display: inline-block;
-    animation: neon-pulse 3.5s infinite alternate;
+    animation: neon-pulse 3.5s infinite alternate, float-gentle 4s ease-in-out infinite;
 }
 
 .studio-title {
     font-family: 'Impact', 'Arial Black', sans-serif;
-    font-size: 2.8em;
+    font-size: 3.2em;
     font-weight: 900;
-    margin: 12px 0 6px 0;
+    margin: 14px 0 6px 0;
     background: linear-gradient(90deg, #ff0055, #ff5500, #ffff00, #00ffff, #7a00ff);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
-    letter-spacing: 2.5px;
+    letter-spacing: 3px;
+    text-shadow: 0 0 20px rgba(255, 0, 85, 0.3);
 }
 
 .studio-subtitle {
-    color: #9090b8;
-    font-size: 1.15em;
+    color: #a0a0d0;
+    font-size: 1.2em;
     font-weight: 500;
     margin: 0;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.8px;
 }
 
+/* Status Badge Styles */
 .status-badge {
-    padding: 14px 18px;
-    border-radius: 10px;
-    background: #12121e;
+    padding: 16px 20px;
+    border-radius: 12px;
+    background: #10101c;
     border-left: 6px solid #00ffff;
     color: #ffffff;
     font-weight: 600;
-    font-family: 'Courier New', monospace;
-    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+    font-family: 'Consolas', 'Courier New', monospace;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+    transition: all 0.3s ease;
 }
 
+.status-badge:hover {
+    box-shadow: 0 0 20px rgba(0, 255, 255, 0.4);
+    transform: translateX(4px);
+}
+
+/* Diagnostics HTML Styling */
+.diag-container {
+    background: #0f0f1a;
+    border: 1px solid #282845;
+    padding: 22px;
+    border-radius: 16px;
+    color: #e0e0e0;
+    font-family: 'Consolas', monospace;
+    box-shadow: inset 0 0 15px rgba(0, 0, 0, 0.5);
+}
+
+.diag-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 18px;
+}
+
+.diag-header h4 {
+    color: #00ffff;
+    margin: 0;
+    font-size: 1.2em;
+}
+
+.diag-badge {
+    background: #00ff66;
+    color: #000;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-weight: 800;
+    font-size: 0.8em;
+}
+
+.diag-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 15px;
+    margin-bottom: 18px;
+}
+
+.diag-card {
+    background: #161626;
+    padding: 14px;
+    border-radius: 10px;
+    border: 1px solid #2a2a48;
+    text-align: center;
+    transition: all 0.3s ease;
+}
+
+.diag-card:hover {
+    border-color: #ff0055;
+    box-shadow: 0 0 15px rgba(255, 0, 85, 0.3);
+}
+
+.diag-label {
+    display: block;
+    font-size: 0.85em;
+    color: #8a8ab0;
+    margin-bottom: 6px;
+}
+
+.diag-value {
+    display: block;
+    font-size: 1.25em;
+    font-weight: bold;
+    color: #ffffff;
+}
+
+.diag-divider {
+    border: 0;
+    border-top: 1px solid #2a2a45;
+    margin: 15px 0;
+}
+
+.diag-log-list {
+    padding-left: 18px;
+    font-size: 0.9em;
+    line-height: 1.7;
+    margin: 0;
+}
+
+/* Footer Styling */
 .studio-footer {
     text-align: center;
-    padding: 20px;
-    color: #707090;
-    font-size: 0.9em;
-    border-top: 1px solid #202035;
-    margin-top: 30px;
+    padding: 25px;
+    color: #8080a8;
+    font-size: 0.95em;
+    border-top: 1px solid #1a1a30;
+    margin-top: 40px;
+    letter-spacing: 0.5px;
+}
+
+/* Tab Header Backlit Animations */
+.tabs > .tab-nav > button {
+    background: #10101c !important;
+    border: 1px solid #202035 !important;
+    color: #8080a8 !important;
+    transition: all 0.3s ease !important;
+    border-radius: 10px 10px 0 0 !important;
+    margin-right: 4px !important;
+    padding: 12px 20px !important;
+    font-weight: 600 !important;
+}
+
+.tabs > .tab-nav > button.selected {
+    background: linear-gradient(180deg, #1d1d36, #10101c) !important;
+    border-color: #00ffff !important;
+    color: #00ffff !important;
+    box-shadow: 0 -4px 15px rgba(0, 255, 255, 0.3) !important;
+}
+
+.tabs > .tab-nav > button:hover:not(.selected) {
+    color: #ffffff !important;
+    border-color: #ff0055 !important;
+    box-shadow: 0 0 12px rgba(255, 0, 85, 0.3) !important;
 }
 """
 
 STUDIO_HEADER_HTML = """
 <div class="studio-header">
     <div class="logo-container">
-        <svg width="90" height="90" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+        <svg width="100" height="100" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
             <defs>
                 <linearGradient id="flameGradMain" x1="0%" y1="100%" x2="100%" y2="0%">
                     <stop offset="0%" style="stop-color:#ff0055;stop-opacity:1" />
                     <stop offset="50%" style="stop-color:#7a00ff;stop-opacity:1" />
                     <stop offset="100%" style="stop-color:#00ffff;stop-opacity:1" />
                 </linearGradient>
+                <filter id="glowEffect" x="-20%" y="-20%" width="140%" height="140%">
+                    <feGaussianBlur stdDeviation="4" result="blur" />
+                    <feComposite in="SourceGraphic" in2="blur" operator="over" />
+                </filter>
             </defs>
-            <circle cx="50" cy="50" r="46" fill="none" stroke="url(#flameGradMain)" stroke-width="4" stroke-dasharray="10 5"/>
-            <path d="M50 12 C28 35, 18 55, 34 78 C44 90, 56 90, 66 78 C82 55, 72 35, 50 12 Z" fill="url(#flameGradMain)" opacity="0.85"/>
-            <path d="M50 28 C36 44, 30 58, 40 72 C46 80, 54 80, 60 72 C70 58, 64 44, 50 28 Z" fill="#0a0a0f"/>
+            <circle cx="50" cy="50" r="46" fill="none" stroke="url(#flameGradMain)" stroke-width="4" stroke-dasharray="10 5" filter="url(#glowEffect)"/>
+            <path d="M50 12 C28 35, 18 55, 34 78 C44 90, 56 90, 66 78 C82 55, 72 35, 50 12 Z" fill="url(#flameGradMain)" opacity="0.88"/>
+            <path d="M50 28 C36 44, 30 58, 40 72 C46 80, 54 80, 60 72 C70 58, 64 44, 50 28 Z" fill="#08080e"/>
             <path d="M50 44 C42 54, 38 62, 45 70 C48 75, 52 75, 55 70 C62 62, 58 54, 50 44 Z" fill="url(#flameGradMain)"/>
         </svg>
     </div>
     <div class="studio-title">SHADOW FLAMEZ STUDIO</div>
-    <div class="studio-subtitle">⚡ Enterprise AI Neural Transparency, FX & Compositing Suite v5.0</div>
+    <div class="studio-subtitle">⚡ Enterprise AI Neural Transparency, FX & Compositing Engine v5.0 Pro</div>
 </div>
 """
 
 STUDIO_FOOTER_HTML = """
 <div class="studio-footer">
-    🔥 <b>Shadow Flamez AI Studio Pro v5.0</b> | High-Performance Python & OpenCV Image Processing Engine
+    🔥 <b>Shadow Flamez AI Studio Pro v5.0</b> | Powered by OpenCV, RemBG Neural Models & Accelerated PIL Engine
 </div>
 """
 
@@ -213,15 +437,15 @@ STUDIO_FOOTER_HTML = """
 
 
 class ImageUtils:
-    """Provides essential utility functions for image conversions and calculations."""
+    """Provides essential utility functions for fast image conversions and matrix calculations."""
 
     @staticmethod
     def pil_to_cv2(pil_image: Image.Image) -> np.ndarray:
-        """Converts PIL Image (RGB/RGBA) to OpenCV NumPy array (BGR/BGRA)."""
+        """Converts PIL Image (RGB/RGBA) to OpenCV NumPy array (BGR/BGRA) efficiently."""
         if pil_image is None:
             raise ValueError("Input PIL Image cannot be None.")
 
-        np_img = np.array(pil_image)
+        np_img = np.asarray(pil_image)
         if np_img.ndim == 2:  # Grayscale
             return cv2.cvtColor(np_img, cv2.COLOR_GRAY2BGR)
         elif np_img.shape[2] == 3:  # RGB
@@ -266,7 +490,7 @@ class ImageUtils:
         w, h = image.size
         ratio = min(max_width / float(w), max_height / float(h))
         if ratio < 1.0:
-            new_size = (int(w * ratio), int(h * ratio))
+            new_size = (max(1, int(w * ratio)), max(1, int(h * ratio)))
             return image.resize(new_size, Image.Resampling.LANCZOS)
         return image
 
@@ -277,7 +501,7 @@ class ImageUtils:
 
 
 class CheckerboardGenerator:
-    """Generates dynamic checkerboard patterns for visualizing transparent backgrounds."""
+    """Generates high-performance checkerboard patterns for transparency visualization."""
 
     @staticmethod
     def create(
@@ -287,19 +511,18 @@ class CheckerboardGenerator:
         color1: Tuple[int, int, int] = (200, 200, 200),
         color2: Tuple[int, int, int] = (240, 240, 240)
     ) -> Image.Image:
-        """Creates a high-contrast checkerboard background grid."""
+        """Creates a high-contrast checkerboard background grid via NumPy vectorization."""
         width = max(1, width)
         height = max(1, height)
         square_size = max(2, square_size)
 
-        bg = np.zeros((height, width, 4), dtype=np.uint8)
+        # Generate coordinate matrices for fast vectorized checkerboard tiling
+        y_coords, x_coords = np.ogrid[:height, :width]
+        checker = ((x_coords // square_size) + (y_coords // square_size)) % 2 == 0
 
-        for y in range(0, height, square_size):
-            for x in range(0, width, square_size):
-                if (x // square_size + y // square_size) % 2 == 0:
-                    bg[y:y + square_size, x:x + square_size] = [color1[0], color1[1], color1[2], 255]
-                else:
-                    bg[y:y + square_size, x:x + square_size] = [color2[0], color2[1], color2[2], 255]
+        bg = np.zeros((height, width, 4), dtype=np.uint8)
+        bg[checker] = [color1[0], color1[1], color1[2], 255]
+        bg[~checker] = [color2[0], color2[1], color2[2], 255]
 
         return Image.fromarray(bg)
 
@@ -310,11 +533,11 @@ class CheckerboardGenerator:
 
 
 class NeuralEngine:
-    """Encapsulates RemBG session models for AI-driven background extraction."""
+    """Encapsulates RemBG session models with caching & fallback management."""
 
     def __init__(self):
         self.sessions: Dict[str, Any] = {}
-        # Pre-load full precision u2net model for maximum accuracy
+        # Pre-load primary model
         self._get_session("u2net")
 
     def _get_session(self, model_name: str):
@@ -411,10 +634,9 @@ class ChromaKeyEngine:
         # Invert mask: Subject = 255 (Opaque), Background = 0 (Transparent)
         subject_mask = cv2.bitwise_not(mask)
 
-        # Apply Spill Suppression (Remove color cast from edges)
+        # Apply Spill Suppression (Remove color cast from subject edges)
         if spill_suppression and screen_type == "Green Screen":
             b_ch, g_ch, r_ch = cv2.split(img_bgr)
-            # Limit Green channel intensity to max of Blue and Red
             max_bg_r = cv2.max(b_ch, r_ch)
             g_ch = cv2.min(g_ch, max_bg_r)
             img_bgr = cv2.merge([b_ch, g_ch, r_ch])
@@ -476,12 +698,49 @@ class ImageEffectsEngine:
         return ImageEnhance.Contrast(merged).enhance(1.25)
 
     @staticmethod
+    def apply_vintage_sepia(pil_image: Image.Image) -> Image.Image:
+        """Applies a warm vintage sepia tone filter while preserving alpha."""
+        rgba = ImageUtils.ensure_rgba(pil_image)
+        np_img = np.array(rgba, dtype=np.float32)
+
+        r, g, b, a = np_img[:, :, 0], np_img[:, :, 1], np_img[:, :, 2], np_img[:, :, 3]
+
+        # Sepia transformation matrix
+        new_r = np.clip(0.393 * r + 0.769 * g + 0.189 * b, 0, 255)
+        new_g = np.clip(0.349 * r + 0.686 * g + 0.168 * b, 0, 255)
+        new_b = np.clip(0.272 * r + 0.534 * g + 0.131 * b, 0, 255)
+
+        sepia_np = np.stack([new_r, new_g, new_b, a], axis=-1).astype(np.uint8)
+        return Image.fromarray(sepia_np)
+
+    @staticmethod
+    def apply_vignette(pil_image: Image.Image, intensity: float = 0.5) -> Image.Image:
+        """Adds a subtle dark vignette overlay onto the composition."""
+        rgba = ImageUtils.ensure_rgba(pil_image)
+        w, h = rgba.size
+
+        # Build radial gradient mask
+        x = np.linspace(-1, 1, w)
+        y = np.linspace(-1, 1, h)
+        xx, yy = np.meshgrid(x, y)
+        radius = np.sqrt(xx**2 + yy**2)
+
+        vignette_mask = np.clip(1.0 - (radius * intensity), 0, 1)
+        
+        np_img = np.array(rgba, dtype=np.float32)
+        np_img[:, :, 0] *= vignette_mask
+        np_img[:, :, 1] *= vignette_mask
+        np_img[:, :, 2] *= vignette_mask
+
+        return Image.fromarray(np_img.astype(np.uint8))
+
+    @staticmethod
     def apply_neon_outline(
         pil_image: Image.Image,
         glow_color: str = "#00FFFF",
         thickness: int = 5
     ) -> Image.Image:
-        """Generates a glowing neon outline around alpha subject boundaries."""
+        """Generates a glowing backlit neon outline around alpha subject boundaries."""
         rgba = ImageUtils.ensure_rgba(pil_image)
         alpha = rgba.split()[3]
 
@@ -525,7 +784,7 @@ class CompositingEngine:
         color_end_hex: str = "#00ffff",
         angle: str = "Linear Diagonal"
     ) -> Image.Image:
-        """Generates smooth multi-color linear or radial gradient backgrounds."""
+        """Generates smooth multi-color linear gradient backgrounds via NumPy."""
         hex1 = color_start_hex.lstrip('#')
         hex2 = color_end_hex.lstrip('#')
 
@@ -535,24 +794,23 @@ class CompositingEngine:
         bg = np.zeros((height, width, 4), dtype=np.uint8)
 
         if angle == "Linear Vertical":
-            for y in range(height):
-                ratio = y / float(height)
-                col = (1.0 - ratio) * c1 + ratio * c2
-                bg[y, :] = [int(col[0]), int(col[1]), int(col[2]), 255]
+            y_ratios = np.linspace(0, 1, height)[:, None]
+            col_matrix = (1.0 - y_ratios) * c1 + y_ratios * c2
+            bg[:, :, :3] = np.tile(col_matrix[:, None, :], (1, width, 1))
 
         elif angle == "Linear Horizontal":
-            for x in range(width):
-                ratio = x / float(width)
-                col = (1.0 - ratio) * c1 + ratio * c2
-                bg[:, x] = [int(col[0]), int(col[1]), int(col[2]), 255]
+            x_ratios = np.linspace(0, 1, width)[None, :]
+            col_matrix = (1.0 - x_ratios.T) * c1 + x_ratios.T * c2
+            bg[:, :, :3] = np.tile(col_matrix[None, :, :], (height, 1, 1))
 
-        else:  # Diagonal
-            for y in range(height):
-                for x in range(width):
-                    ratio = (x / float(width) + y / float(height)) / 2.0
-                    col = (1.0 - ratio) * c1 + ratio * c2
-                    bg[y, x] = [int(col[0]), int(col[1]), int(col[2]), 255]
+        else:  # Linear Diagonal
+            y_coords, x_coords = np.ogrid[:height, :width]
+            diag_ratios = (x_coords / float(width) + y_coords / float(height)) / 2.0
+            bg[:, :, 0] = (1.0 - diag_ratios) * c1[0] + diag_ratios * c2[0]
+            bg[:, :, 1] = (1.0 - diag_ratios) * c1[1] + diag_ratios * c2[1]
+            bg[:, :, 2] = (1.0 - diag_ratios) * c1[2] + diag_ratios * c2[2]
 
+        bg[:, :, 3] = 255  # Opaque Alpha
         return Image.fromarray(bg)
 
     @staticmethod
@@ -593,7 +851,6 @@ class CompositingEngine:
                 bg_resized = custom_bg_img.convert("RGBA").resize((w, h), Image.Resampling.LANCZOS)
                 return Image.alpha_composite(bg_resized, fg_rgba)
             else:
-                # Fallback to checkerboard if no custom image was provided
                 bg = CheckerboardGenerator.create(w, h)
                 return Image.alpha_composite(bg, fg_rgba)
 
@@ -617,7 +874,7 @@ class WatermarkEngine:
         font_size: int = 32,
         text_color: str = "#FFFFFF"
     ) -> Image.Image:
-        """Draws branded text watermark onto image canvas with customizable position and opacity."""
+        """Draws branded text watermark onto image canvas with custom position and opacity."""
         if not text.strip():
             return image
 
@@ -625,19 +882,17 @@ class WatermarkEngine:
         txt_layer = Image.new("RGBA", base.size, (255, 255, 255, 0))
         draw = ImageDraw.Draw(txt_layer)
 
-        # Load font safely or default
         try:
             font = ImageFont.truetype("arial.ttf", font_size)
         except OSError:
             font = ImageFont.load_default()
 
-        # Calculate bounding box of text
         bbox = draw.textbbox((0, 0), text, font=font)
         text_w = bbox[2] - bbox[0]
         text_h = bbox[3] - bbox[1]
 
         w, h = base.size
-        margin = 20
+        margin = 25
 
         if position == "Top Left":
             pos = (margin, margin)
@@ -654,6 +909,9 @@ class WatermarkEngine:
         rgb = tuple(int(hex_val[i:i+2], 16) for i in (0, 2, 4))
         alpha_val = int(255 * opacity)
 
+        # Draw soft shadow for high text visibility
+        shadow_pos = (pos[0] + 2, pos[1] + 2)
+        draw.text(shadow_pos, text, font=font, fill=(0, 0, 0, alpha_val // 2))
         draw.text(pos, text, font=font, fill=(rgb[0], rgb[1], rgb[2], alpha_val))
 
         return Image.alpha_composite(base, txt_layer)
@@ -682,7 +940,6 @@ class BatchEngine:
         start_time = time.time()
         processed_images: List[Image.Image] = []
 
-        # Create temporary zip archive in memory
         zip_buffer = io.BytesIO()
 
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
@@ -697,6 +954,8 @@ class BatchEngine:
                         pil_img = ImageUtils.cv2_to_pil(img_data)
                     elif isinstance(img_data, str):
                         pil_img = Image.open(img_data)
+                    elif hasattr(img_data, "name"):  # Gradio NamedString/File object
+                        pil_img = Image.open(img_data.name)
                     else:
                         pil_img = img_data
 
@@ -723,9 +982,10 @@ class BatchEngine:
                 except Exception as e:
                     logger.error(f"Error processing batch item {idx+1}: {e}")
 
+        # Garbage collect intermediate batch buffers
+        gc.collect()
+
         zip_buffer.seek(0)
-        
-        # Save temporary zip file locally for download
         zip_path = os.path.join(os.getcwd(), "shadow_flamez_batch_export.zip")
         with open(zip_path, "wb") as f:
             f.write(zip_buffer.getvalue())
@@ -812,7 +1072,7 @@ def single_image_pipeline(
         diagnostics.record_task("Single Image Pipeline", elapsed, details=f"Mode: {processing_mode} ({ai_model_name})")
 
         status_html = format_status_badge(
-            f"Image rendered in {elapsed}s | Mode: {processing_mode} ({ai_model_name}) | Compositing: {bg_option}",
+            f"Image rendered in {elapsed}s | Mode: {processing_mode} | Compositing: {bg_option}",
             "success"
         )
         return final_output, status_html
@@ -847,6 +1107,8 @@ def fx_pipeline(
         # Step 2: Artistic FX Selection
         if fx_choice == "Cyberpunk Teal & Pink":
             img = ImageEffectsEngine.apply_cyberpunk_filter(img)
+        elif fx_choice == "Vintage Sepia":
+            img = ImageEffectsEngine.apply_vintage_sepia(img)
         elif fx_choice == "Neon Glow Outline":
             img = ImageEffectsEngine.apply_neon_outline(img, glow_color, glow_thickness)
 
@@ -890,10 +1152,15 @@ def watermark_pipeline(
 # 12. MAIN GRADIO BLOCKS APPLICATION BUILDER
 # ==============================================================================
 
-def build_studio_app() -> gr.Blocks:
-    """Constructs the multi-tab Gradio UI Blocks Application."""
 
-    with gr.Blocks(title="Shadow Flamez AI Studio Pro v5.0", css=STUDIO_CSS, theme=gr.themes.Slate()) as demo:
+def build_studio_app() -> gr.Blocks:
+    """Constructs the multi-tab Gradio UI Blocks Application with modern backlit FX."""
+
+    with gr.Blocks(
+        title="Shadow Flamez AI Studio Pro v5.0",
+        css=STUDIO_CSS,
+        theme=gr.themes.Slate()
+    ) as demo:
 
         # Header Hero Banner
         gr.HTML(STUDIO_HEADER_HTML)
@@ -929,10 +1196,12 @@ def build_studio_app() -> gr.Blocks:
                             choices=[
                                 "u2net",
                                 "isnet-general-use",
-                                "u2netp"
+                                "u2netp",
+                                "silueta",
+                                "u2net_human_seg"
                             ],
                             value="u2net",
-                            label="🧠 AI Model Selection (Use u2net for detailed cutouts)"
+                            label="🧠 AI Neural Model Selection"
                         )
 
                         with gr.Accordion("🎛️ Chroma Key Fine-Tuning Controls", open=False):
@@ -981,7 +1250,7 @@ def build_studio_app() -> gr.Blocks:
                         status_box = gr.HTML(format_status_badge("System Ready. Upload an image to start.", "info"))
                         output_img = gr.Image(type="pil", label="Rendered Output", format="png", interactive=False)
 
-                # Connect Event Handler
+                # Event Linkage
                 btn_process.click(
                     fn=single_image_pipeline,
                     inputs=[
@@ -1007,7 +1276,7 @@ def build_studio_app() -> gr.Blocks:
                         sharp_slider = gr.Slider(0.0, 3.0, value=1.0, step=0.1, label="Sharpness")
 
                         fx_preset = gr.Radio(
-                            choices=["None", "Cyberpunk Teal & Pink", "Neon Glow Outline"],
+                            choices=["None", "Cyberpunk Teal & Pink", "Vintage Sepia", "Neon Glow Outline"],
                             value="None",
                             label="Artistic Preset FX"
                         )
@@ -1107,7 +1376,7 @@ def build_studio_app() -> gr.Blocks:
             with gr.Tab("📊 System Diagnostics"):
                 gr.Markdown("### 📈 Real-Time Diagnostics & Performance Metrics")
                 diag_html = gr.HTML(diagnostics.generate_report_html())
-                btn_refresh_diag = gr.Button("🔄 REFRESH DIAGNOSTICS")
+                btn_refresh_diag = gr.Button("🔄 REFRESH DIAGNOSTICS", variant="secondary")
 
                 btn_refresh_diag.click(
                     fn=lambda: diagnostics.generate_report_html(),
@@ -1126,9 +1395,7 @@ def build_studio_app() -> gr.Blocks:
 # ==============================================================================
 
 if __name__ == "__main__":
-    # Get port assigned by Render (defaults to 10000)
     port = int(os.environ.get("PORT", 10000))
-    
     app = build_studio_app()
     app.launch(
         server_name="0.0.0.0",

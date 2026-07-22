@@ -1112,12 +1112,20 @@ def build_studio_app() -> gr.Blocks:
 # 13. APPLICATION ENTRY POINT
 # ==============================================================================
 
+# ==============================================================================
+# 13. APPLICATION ENTRY POINT
+# ==============================================================================
+
 if __name__ == "__main__":
     logger.info("Initializing Shadow Flamez AI Studio Pro v5.0...")
+    
+    # Read dynamic port assigned by Render (defaults to 7860 if local)
+    server_port = int(os.environ.get("PORT", 7860))
+    
     app = build_studio_app()
     app.launch(
         server_name="0.0.0.0",
-        server_port=7860,
+        server_port=server_port,
         show_error=True,
         share=False
     )

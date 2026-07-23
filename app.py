@@ -3,16 +3,17 @@ import io
 import gc
 import zipfile
 import numpy as np
+import cv2
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 import gradio as gr
-
-# Keep top level light! Do NOT import cv2, rembg, or onnxruntime here.
+import onnxruntime as ort
+from rembg import remove, new_session
 
 # ======================================================
 # 1. GLOBAL CONFIGURATION & ONNX CPU THREAD OPTIMIZATION
 # ======================================================
 
-# Restrict ONNX to 1 thread to avoid CPU thrashing on 0.1 vCPU cores
+# Restrict ONNX to 1 thread to avoid CPU thrashing on Render's 0.1 vCPU core
 ort_options = ort.SessionOptions()
 ort_options.intra_op_num_threads = 1
 ort_options.inter_op_num_threads = 1
@@ -301,12 +302,12 @@ def apply_image_preset(img: Image.Image, preset_name: str) -> Image.Image:
         img_np = np.clip(img_np, 0, 255).astype(np.uint8)
 
     elif preset_name == "Cyberpunk Glow":
-        img_np[:, :, 0] = np.clip(img_np[:, :, 0] * 1.2, 0, 255) # Red/Pink boost
-        img_np[:, :, 2] = np.clip(img_np[:, :, 2] * 1.3, 0, 255) # Blue/Cyan boost
+        img_np[:, :, 0] = np.clip(img_np[:, :, 0] * 1.2, 0, 255)
+        img_np[:, :, 2] = np.clip(img_np[:, :, 2] * 1.3, 0, 255)
 
     elif preset_name == "Cinematic Cool":
-        img_np[:, :, 0] = np.clip(img_np[:, :, 0] * 0.85, 0, 255) # Reduce Red
-        img_np[:, :, 2] = np.clip(img_np[:, :, 2] * 1.25, 0, 255) # Boost Blue
+        img_np[:, :, 0] = np.clip(img_np[:, :, 0] * 0.85, 0, 255)
+        img_np[:, :, 2] = np.clip(img_np[:, :, 2] * 1.25, 0, 255)
 
     elif preset_name == "High Contrast B&W":
         gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
@@ -352,8 +353,8 @@ def process_tab4_enhancer(
     if temperature != 0:
         img_np = np.array(work_img.convert("RGB")).astype(float)
         if temperature > 0: # Warm
-            img_np[:, :, 0] += temperature * 15 # Red
-            img_np[:, :, 2] -= temperature * 10 # Blue
+            img_np[:, :, 0] += temperature * 15
+            img_np[:, :, 2] -= temperature * 10
         else: # Cool
             img_np[:, :, 0] += temperature * 10
             img_np[:, :, 2] -= temperature * 15
@@ -418,10 +419,9 @@ def process_tab5_resizer(
         res_img = ImageOps.pad(input_img, (w, h), color=(255, 255, 255))
     elif crop_mode == "Center Crop":
         res_img = ImageOps.fit(input_img, (w, h), centering=(0.5, 0.5))
-    else: # Stretch / Direct Scale
+    else: # Stretch
         res_img = input_img.resize((w, h), Image.Resampling.LANCZOS)
 
-    # Save to buffer for file download format test
     buffer = io.BytesIO()
     save_fmt = output_format.upper()
     if save_fmt == "JPG":
@@ -434,7 +434,6 @@ def process_tab5_resizer(
     file_size_kb = len(buffer.getvalue()) / 1024.0
     status_msg = f"Resized to {w}x{h} px | Format: {output_format} | Size: ~{file_size_kb:.1f} KB"
 
-    # Temporary file output path
     out_file_path = f"resized_output.{output_format.lower()}"
     res_img.save(out_file_path, format=save_fmt, quality=quality_setting)
 
@@ -465,7 +464,6 @@ def process_tab6_batch(file_list, model_name, apply_preset_name):
                 if apply_preset_name != "None":
                     out_img = apply_image_preset(out_img, apply_preset_name)
 
-                # Save into zip
                 img_byte_arr = io.BytesIO()
                 out_img.save(img_byte_arr, format="PNG")
                 
@@ -512,7 +510,6 @@ def process_tab7_inspector(input_img):
     
     colors = centers.astype(int)
     
-    # Render palette image
     palette_height = 100
     palette_width = 500
     palette_img = np.zeros((palette_height, palette_width, 3), dtype=np.uint8)
@@ -580,7 +577,7 @@ def build_app():
                             t1_invert = gr.Checkbox(label="Invert Alpha Mask", value=False)
                             t1_feather = gr.Slider(0, 20, value=0, step=1, label="Feather Edges")
                             t1_bg_color = gr.Dropdown(
-                                ["Transparent", "#FFFFFF", "#000000", "#FF0000", "#00FF00", "#0000FF"],
+                                ["Transparent", "#FFFFFF", "#000000", "#FF0000", "#00FF00", "#00FF00"],
                                 value="Transparent",
                                 label="Background Fill Color"
                             )

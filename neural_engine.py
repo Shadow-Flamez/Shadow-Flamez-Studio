@@ -1,9 +1,9 @@
 """
-neural_engine.py - Advanced AI Processing, Filters, Relighting, Shadows & FX
+neural_engine.py - Complete Neural Extraction, 4X Super Res, Drop Shadow, Relighting & Cyber FX Engine
 """
 import cv2
 import numpy as np
-from PIL import Image, ImageFilter, ImageEnhance, ImageOps, ImageColor
+from PIL import Image, ImageFilter, ImageEnhance, ImageOps
 from typing import Optional, Tuple
 
 
@@ -22,7 +22,7 @@ class NeuralEngine:
         session = self._get_session(model_name)
         return remove(pil_image, session=session)
 
-    # --- FEATURE 1: 4X Neural Super Resolution ---
+    # 1. AI 4X Super Resolution Scaler
     @staticmethod
     def upscale_4x_neural(pil_img: Image.Image, sharpness_boost: float = 1.5) -> Image.Image:
         if pil_img is None:
@@ -32,7 +32,7 @@ class NeuralEngine:
         enhancer = ImageEnhance.Sharpen(upscaled)
         return enhancer.enhance(sharpness_boost)
 
-    # --- FEATURE 2: Neon Aura Glow Halo ---
+    # 2. Neon Aura Glow Halo Effect
     @staticmethod
     def generate_neon_aura(fg_rgba: Image.Image, aura_color_hex: str = "#00FFFF", blur_radius: int = 25, glow_intensity: float = 2.0) -> Image.Image:
         if fg_rgba.mode != "RGBA":
@@ -46,7 +46,7 @@ class NeuralEngine:
         aura_layer.paste(aura_color, (0, 0), mask=aura_mask)
         return Image.alpha_composite(aura_layer, fg_rgba)
 
-    # --- FEATURE 3: Cyber Outline Contours ---
+    # 3. Cyber Outline Contour Stroke
     @staticmethod
     def generate_cyber_outline(fg_rgba: Image.Image, outline_hex: str = "#FF007F", stroke_width: int = 5) -> Image.Image:
         if fg_rgba.mode != "RGBA":
@@ -60,7 +60,7 @@ class NeuralEngine:
         outline_layer.paste(outline_color, (0, 0), mask=Image.fromarray(contour_mask))
         return Image.alpha_composite(outline_layer, fg_rgba)
 
-    # --- FEATURE 4: Dynamic Realistic Drop Shadows ---
+    # 4. Realistic Soft Drop Shadow
     @staticmethod
     def apply_drop_shadow(fg_rgba: Image.Image, offset_x: int = 15, offset_y: int = 20, blur_r: int = 15, shadow_hex: str = "#000000", opacity: float = 0.6) -> Image.Image:
         if fg_rgba.mode != "RGBA":
@@ -74,7 +74,7 @@ class NeuralEngine:
         shadow_canvas.paste(shadow_img, (offset_x, offset_y), mask=shadow_mask)
         return Image.alpha_composite(shadow_canvas, fg_rgba)
 
-    # --- FEATURE 5: Realistic Bokeh Blur Background Simulator ---
+    # 5. Bokeh Background Blur Simulator
     @staticmethod
     def simulate_bokeh_bg(fg_rgba: Image.Image, bg_img: Image.Image, blur_amount: int = 20) -> Image.Image:
         if fg_rgba.mode != "RGBA":
@@ -83,7 +83,7 @@ class NeuralEngine:
         blurred_bg = bg_resized.filter(ImageFilter.GaussianBlur(blur_amount))
         return Image.alpha_composite(blurred_bg.convert("RGBA"), fg_rgba)
 
-    # --- FEATURE 6: Cyberpunk RGB Glitch Split ---
+    # 6. RGB Glitch Split Effect
     @staticmethod
     def apply_rgb_glitch(pil_img: Image.Image, offset: int = 10) -> Image.Image:
         img_np = np.array(pil_img)
@@ -97,22 +97,15 @@ class NeuralEngine:
             glitched = np.dstack([glitched, img_np[:, :, 3]])
         return Image.fromarray(glitched)
 
-    # --- FEATURE 7: Auto Magic Color & Tone Enhancer ---
-    @staticmethod
-    def auto_enhance_tone(pil_img: Image.Image, contrast: float = 1.2, brightness: float = 1.1, color: float = 1.25) -> Image.Image:
-        img = ImageEnhance.Contrast(pil_img).enhance(contrast)
-        img = ImageEnhance.Brightness(img).enhance(brightness)
-        return ImageEnhance.Color(img).enhance(color)
-
-    # --- FEATURE 8: Cinematic LUT Color Grading ---
+    # 7. Cinematic Color Grading LUT Presets
     @staticmethod
     def apply_lut_preset(pil_img: Image.Image, preset: str = "Cyberpunk Neo") -> Image.Image:
         img = pil_img.convert("RGB")
         img_np = np.array(img).astype(float) / 255.0
 
         if preset == "Cyberpunk Neo":
-            img_np[:, :, 0] = np.clip(img_np[:, :, 0] * 1.2, 0, 1) # Red boost
-            img_np[:, :, 2] = np.clip(img_np[:, :, 2] * 1.4, 0, 1) # Blue boost
+            img_np[:, :, 0] = np.clip(img_np[:, :, 0] * 1.2, 0, 1)
+            img_np[:, :, 2] = np.clip(img_np[:, :, 2] * 1.4, 0, 1)
         elif preset == "Matrix Green":
             img_np[:, :, 0] *= 0.3
             img_np[:, :, 1] = np.clip(img_np[:, :, 1] * 1.4, 0, 1)
@@ -132,32 +125,7 @@ class NeuralEngine:
             res_pil.putalpha(pil_img.split()[3])
         return res_pil
 
-    # --- FEATURE 9: Selective Color Isolation / Color Splash ---
-    @staticmethod
-    def color_splash(pil_img: Image.Image, keep_color: str = "Red") -> Image.Image:
-        cv_img = cv2.cvtColor(np.array(pil_img.convert("RGB")), cv2.COLOR_RGB2BGR)
-        hsv = cv2.cvtColor(cv_img, cv2.COLOR_BGR2HSV)
-
-        if keep_color == "Red":
-            mask1 = cv2.inRange(hsv, np.array([0, 70, 50]), np.array([10, 255, 255]))
-            mask2 = cv2.inRange(hsv, np.array([170, 70, 50]), np.array([180, 255, 255]))
-            mask = mask1 | mask2
-        elif keep_color == "Green":
-            mask = cv2.inRange(hsv, np.array([36, 50, 50]), np.array([86, 255, 255]))
-        else: # Blue
-            mask = cv2.inRange(hsv, np.array([94, 80, 2] ), np.array([126, 255, 255]))
-
-        gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
-        gray_3ch = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-        splash = np.where(mask[:, :, None] == 255, cv_img, gray_3ch)
-        
-        res_pil = Image.fromarray(cv2.cvtColor(splash, cv2.COLOR_BGR2RGB))
-        if pil_img.mode == "RGBA":
-            res_pil = res_pil.convert("RGBA")
-            res_pil.putalpha(pil_img.split()[3])
-        return res_pil
-
-    # --- FEATURE 10: Retro 8-Bit Pixel Art Downscaler ---
+    # 8. Retro 8-Bit Pixel Art Downscaler
     @staticmethod
     def pixel_art_downscale(pil_img: Image.Image, pixel_size: int = 12) -> Image.Image:
         w, h = pil_img.size

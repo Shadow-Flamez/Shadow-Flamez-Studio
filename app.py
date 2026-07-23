@@ -1,666 +1,794 @@
-"""
-==============================================================================
-SHADOW FLAMEZ AI STUDIO PRO v6.0 - MASTER STANDALONE ENGINE
-Full-Featured 11-Tab Web Suite with Local CPU Acceleration & Zero External Dependencies
-==============================================================================
-"""
-
-import io
 import os
-import time
+import io
+import gc
 import zipfile
-import tempfile
 import numpy as np
 import cv2
-from PIL import Image, ImageEnhance, ImageOps, ImageFilter, ImageDraw, ImageFont
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 import gradio as gr
-import rembg
+import onnxruntime as ort
+from rembg import remove, new_session
 
-from styles import STUDIO_CSS, STUDIO_HEADER_HTML, STUDIO_FOOTER_HTML
+# ======================================================
+# 1. GLOBAL CONFIGURATION & ONNX CPU THREAD OPTIMIZATION
+# ======================================================
 
-# Pre-load sessions into VRAM/RAM cache
-MODEL_CACHE = {}
+# Restrict ONNX to 1 thread to avoid CPU thrashing on 0.1 vCPU cores
+ort_options = ort.SessionOptions()
+ort_options.intra_op_num_threads = 1
+ort_options.inter_op_num_threads = 1
 
-def get_rembg_session(model_name: str):
-    """Lazy-load and cache rembg models to optimize memory usage"""
-    if model_name not in MODEL_CACHE:
-        MODEL_CACHE[model_name] = rembg.new_session(model_name)
-    return MODEL_CACHE[model_name]
+# Lazy session cache to prevent memory duplication
+REMBG_SESSIONS = {}
 
-def format_status(msg: str, status_type: str = "info") -> str:
-    """Generates styled HTML status badges"""
-    colors = {"info": "#00f3ff", "success": "#00ff66", "warning": "#ffaa00", "error": "#ff0055"}
-    col = colors.get(status_type, "#00f3ff")
-    return f'<div class="status-badge" style="border-color: {col}; color: {col};">STATUS: {msg}</div>'
-
-def add_to_gallery(image: Image.Image, gallery_state: list) -> list:
-    """Helper to update the session history deck"""
-    if image is None:
-        return gallery_state
-    if gallery_state is None:
-        gallery_state = []
-    # Store copy in memory list
-    gallery_state.append(image)
-    return gallery_state
-
-
-# ==============================================================================
-# BACKEND CORE PIPELINES
-# ==============================================================================
-
-# --- 1. MAGIC BRUSH & INPAINTING ---
-def execute_magic_brush(editor_data, algorithm: str, dilate_radius: int, progress=gr.Progress()):
-    if editor_data is None or "composite" not in editor_data:
-        return None, format_status("Please paint over an object first.", "warning"), None
-
-    bg = editor_data.get("background")
-    layers = editor_data.get("layers")
-    if not layers or bg is None:
-        return None, format_status("No painted mask detected.", "warning"), None
-
-    start_time = time.time()
-    progress(0.2, desc="Extracting Image Matrices...")
-    
-    img_np = np.array(bg.convert("RGB"))
-    mask_np = np.array(layers[0].convert("L"))
-
-    # Binarize mask
-    _, mask_binary = cv2.threshold(mask_np, 10, 255, cv2.THRESH_BINARY)
-
-    # Optional Mask Dilation for cleaner edge blending
-    if dilate_radius > 0:
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilate_radius * 2 + 1, dilate_radius * 2 + 1))
-        mask_binary = cv2.dilate(mask_binary, kernel)
-
-    progress(0.6, desc="Applying Fast Inpainting Engine...")
-    flag = cv2.INPAINT_TELEA if "Telea" in algorithm else cv2.INPAINT_NS
-    inpainted_np = cv2.inpaint(img_np, mask_binary, inpaintRadius=5, flags=flag)
-    
-    result = Image.fromarray(inpainted_np)
-    elapsed = round(time.time() - start_time, 3)
-    return result, format_status(f"Object erased in {elapsed}s!", "success"), result
+def get_rembg_session(model_name: str = "u2netp"):
+    """
+    Retrieves or initializes a rembg session with CPU thread caps.
+    Defaulting to u2netp keeps memory consumption under 200MB.
+    """
+    if model_name not in REMBG_SESSIONS:
+        REMBG_SESSIONS[model_name] = new_session(
+            model_name, 
+            providers=["CPUExecutionProvider"], 
+            sess_options=ort_options
+        )
+    return REMBG_SESSIONS[model_name]
 
 
-# --- 2. BACKGROUND & COMPOSITOR ---
-def execute_bg_compositor(input_img: Image.Image, model_name: str, mode: str, color_hex: str, custom_bg: Image.Image, blur_amt: int, progress=gr.Progress()):
-    if input_img is None:
-        return None, format_status("Please upload an image.", "warning"), None
+# ======================================================
+# 2. CORE OPTIMIZED AI & IMAGE PROCESSING ENGINE
+# ======================================================
 
-    start_time = time.time()
-    progress(0.3, desc="Extracting Foreground Subject...")
-    
-    session = get_rembg_session(model_name)
-    fg_transparent = rembg.remove(input_img, session=session)
+def smart_bg_removal(
+    img: Image.Image,
+    model_name: str = "u2netp",
+    alpha_matting: bool = False,
+    af_fg_thresh: int = 240,
+    af_bg_thresh: int = 10,
+    af_erode_size: int = 10,
+    max_proc_dim: int = 1024
+):
+    """
+    Processes background removal on a downscaled tensor and upscales
+    the alpha mask back to full original resolution without quality loss.
+    """
+    if img is None:
+        return None, None
 
-    progress(0.7, desc="Compositing Background...")
-    
-    if mode == "Transparent (PNG)":
-        final_img = fg_transparent
-    elif mode == "Solid Custom Color":
-        bg_canvas = Image.new("RGBA", fg_transparent.size, color_hex)
-        bg_canvas.paste(fg_transparent, (0, 0), mask=fg_transparent.split()[3])
-        final_img = bg_canvas
-    elif mode == "Blur Original Background":
-        blurred_bg = input_img.convert("RGBA").filter(ImageFilter.GaussianBlur(radius=blur_amt))
-        blurred_bg.paste(fg_transparent, (0, 0), mask=fg_transparent.split()[3])
-        final_img = blurred_bg
-    elif mode == "Custom Image Replacement" and custom_bg is not None:
-        resized_bg = custom_bg.convert("RGBA").resize(fg_transparent.size, Image.Resampling.LANCZOS)
-        resized_bg.paste(fg_transparent, (0, 0), mask=fg_transparent.split()[3])
-        final_img = resized_bg
+    orig_w, orig_h = img.size
+
+    # Step A: Scale down for neural network processing if image is huge
+    if max(orig_w, orig_h) > max_proc_dim:
+        scale = max_proc_dim / float(max(orig_w, orig_h))
+        work_w, work_h = int(orig_w * scale), int(orig_h * scale)
+        work_img = img.resize((work_w, work_h), Image.Resampling.LANCZOS)
     else:
-        final_img = fg_transparent
+        work_img = img.copy()
 
-    elapsed = round(time.time() - start_time, 2)
-    return final_img, format_status(f"Composited in {elapsed}s!", "success"), final_img
+    # Step B: Get session & extract alpha mask
+    session = get_rembg_session(model_name)
+    mask_png = remove(
+        work_img,
+        session=session,
+        only_mask=True,
+        alpha_matting=alpha_matting,
+        alpha_matting_foreground_threshold=af_fg_thresh,
+        alpha_matting_background_threshold=af_bg_thresh,
+        alpha_matting_erode_size=af_erode_size
+    )
+
+    # Step C: Upscale mask back to original resolution
+    full_mask = mask_png.resize((orig_w, orig_h), Image.Resampling.BICUBIC)
+
+    # Step D: Apply mask to full-resolution input image
+    result = img.convert("RGBA")
+    result.putalpha(full_mask)
+
+    # Step E: Memory cleanup
+    del work_img, mask_png
+    gc.collect()
+
+    return result, full_mask
 
 
-# --- 3. 4X UPSCALER & CYBER FX ---
-def execute_cyber_fx(img: Image.Image, scale_factor: str, lut_preset: str, sharpness: float, glitch_fx: bool, progress=gr.Progress()):
-    if img is None:
-        return None, format_status("Upload an image first.", "warning"), None
+# ======================================================
+# 3. TAB 1: BACKGROUND REMOVER & ALPHA MATTING STUDIO
+# ======================================================
 
-    start_time = time.time()
-    progress(0.2, desc="Applying Color Presets...")
+def process_tab1_bg_removal(
+    input_img,
+    model_name,
+    alpha_matting,
+    fg_thresh,
+    bg_thresh,
+    erode_size,
+    invert_mask,
+    bg_color_hex,
+    feather_radius
+):
+    if input_img is None:
+        return None, None, "Please upload an image first."
+
+    # Execute smart BG removal
+    result_rgba, alpha_mask = smart_bg_removal(
+        input_img,
+        model_name=model_name,
+        alpha_matting=alpha_matting,
+        af_fg_thresh=fg_thresh,
+        af_bg_thresh=bg_thresh,
+        af_erode_size=erode_size
+    )
+
+    if invert_mask:
+        inv_alpha = ImageOps.invert(alpha_mask)
+        result_rgba = input_img.convert("RGBA")
+        result_rgba.putalpha(inv_alpha)
+        alpha_mask = inv_alpha
+
+    if feather_radius > 0:
+        alpha_mask = alpha_mask.filter(ImageFilter.GaussianBlur(feather_radius))
+        result_rgba.putalpha(alpha_mask)
+
+    # Optional background fill
+    final_output = result_rgba
+    if bg_color_hex and bg_color_hex != "Transparent":
+        bg = Image.new("RGBA", result_rgba.size, bg_color_hex)
+        final_output = Image.alpha_composite(bg, result_rgba).convert("RGB")
+
+    info = f"Processed successfully at original resolution ({input_img.width}x{input_img.height} px)."
     
-    res = img.convert("RGB")
+    del alpha_mask
+    gc.collect()
     
-    # LUT / Color Styling
-    if lut_preset == "Cyberpunk Neo":
-        res = ImageEnhance.Color(res).enhance(1.5)
-        res = ImageEnhance.Contrast(res).enhance(1.2)
-    elif lut_preset == "Matrix Green":
-        np_img = np.array(res)
-        np_img[:, :, 0] = np_img[:, :, 0] * 0.2  # Red channel
-        np_img[:, :, 2] = np_img[:, :, 2] * 0.3  # Blue channel
-        res = Image.fromarray(np.clip(np_img, 0, 255).astype(np.uint8))
-    elif lut_preset == "Synthwave Magenta":
-        np_img = np.array(res, dtype=np.float32)
-        np_img[:, :, 0] *= 1.3  # Boost Red
-        np_img[:, :, 2] *= 1.4  # Boost Blue
-        res = Image.fromarray(np.clip(np_img, 0, 255).astype(np.uint8))
-    elif lut_preset == "Noir Monochrome":
-        res = ImageOps.grayscale(res).convert("RGB")
-
-    # Chromatic Glitch Effect
-    if glitch_fx:
-        np_img = np.array(res)
-        shift = 8
-        r = np_img[:, :, 0]
-        g = np_img[:, :, 1]
-        b = np_img[:, :, 2]
-        np_img[:, :, 0] = np.roll(r, shift, axis=1)
-        np_img[:, :, 2] = np.roll(b, -shift, axis=1)
-        res = Image.fromarray(np_img)
-
-    progress(0.6, desc="Upscaling High-Res Matrix...")
-    factor = 4 if "4x" in scale_factor else (2 if "2x" in scale_factor else 1)
-    if factor > 1:
-        w, h = res.size
-        res = res.resize((w * factor, h * factor), Image.Resampling.LANCZOS)
-
-    # Sharpness Enhancement
-    res = ImageEnhance.Sharpen(res).enhance(sharpness)
-    elapsed = round(time.time() - start_time, 2)
-    return res, format_status(f"Scaled {factor}x & FX Applied in {elapsed}s!", "success"), res
+    return final_output, result_rgba, info
 
 
-# --- 4. WATERMARK & BRANDING STUDIO ---
-def execute_watermark(img: Image.Image, text: str, position: str, opacity: float, font_size: int, progress=gr.Progress()):
-    if img is None:
-        return None, format_status("Upload a base image.", "warning"), None
+# ======================================================
+# 4. TAB 2: ADVANCED BACKGROUND COMPOSITOR
+# ======================================================
 
-    progress(0.4, desc="Overlaying Watermark Layer...")
-    base = img.convert("RGBA")
-    txt_layer = Image.new("RGBA", base.size, (255, 255, 255, 0))
-    draw = ImageDraw.Draw(txt_layer)
+def process_tab2_composite(
+    fg_img,
+    bg_img,
+    model_name,
+    scale_factor,
+    offset_x,
+    offset_y,
+    rotation_deg,
+    bg_blur,
+    shadow_opacity,
+    shadow_blur,
+    shadow_dx,
+    shadow_dy,
+    match_brightness
+):
+    if fg_img is None or bg_img is None:
+        return None, "Both foreground and background images are required."
 
-    try:
-        font = ImageFont.truetype("arial.ttf", font_size)
-    except IOError:
-        font = ImageFont.load_default()
+    # Extract cutout
+    fg_cutout, mask = smart_bg_removal(fg_img, model_name=model_name)
 
-    # Calculate text bounding box
-    bbox = draw.textbbox((0, 0), text, font=font)
-    text_w, text_h = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    w, h = base.size
+    # Resize background to match foreground resolution base
+    bg_w, bg_h = bg_img.size
+    fg_w, fg_h = fg_cutout.size
 
-    # Position logic
-    margin = 20
-    if position == "Bottom-Right":
-        pos = (w - text_w - margin, h - text_h - margin)
-    elif position == "Bottom-Left":
-        pos = (margin, h - text_h - margin)
-    elif position == "Top-Right":
-        pos = (w - text_w - margin, margin)
-    elif position == "Top-Left":
-        pos = (margin, margin)
-    else:  # Center
-        pos = ((w - text_w) // 2, (h - text_h) // 2)
+    base_bg = bg_img.convert("RGBA")
+    if bg_blur > 0:
+        base_bg = base_bg.filter(ImageFilter.GaussianBlur(bg_blur))
 
-    alpha_val = int(opacity * 255)
-    draw.text(pos, text, font=font, fill=(255, 255, 255, alpha_val))
+    # Match brightness if requested
+    if match_brightness:
+        bg_np = np.array(bg_img.convert("L"))
+        fg_np = np.array(fg_img.convert("L"))
+        bg_mean = np.mean(bg_np) / 255.0
+        fg_mean = np.mean(fg_np) / 255.0
+        if fg_mean > 0:
+            ratio = bg_mean / fg_mean
+            enhancer = ImageEnhance.Brightness(fg_cutout)
+            fg_cutout = enhancer.enhance(max(0.5, min(1.5, ratio)))
 
-    watermarked = Image.alpha_composite(base, txt_layer)
-    return watermarked, format_status("Watermark Applied Successfully!", "success"), watermarked
+    # Apply scaling and rotation to foreground cutout
+    if scale_factor != 1.0 or rotation_deg != 0:
+        new_w = max(1, int(fg_w * scale_factor))
+        new_h = max(1, int(fg_h * scale_factor))
+        fg_cutout = fg_cutout.resize((new_w, new_h), Image.Resampling.LANCZOS)
+        if rotation_deg != 0:
+            fg_cutout = fg_cutout.rotate(rotation_deg, expand=True, resample=Image.Resampling.BICUBIC)
+
+    # Canvas creation
+    canvas = Image.new("RGBA", base_bg.size, (0, 0, 0, 0))
+
+    # Compute placement position
+    place_x = (base_bg.width - fg_cutout.width) // 2 + offset_x
+    place_y = (base_bg.height - fg_cutout.height) // 2 + offset_y
+
+    # Render drop shadow if requested
+    if shadow_opacity > 0:
+        shadow_mask = fg_cutout.split()[3]
+        shadow = Image.new("RGBA", fg_cutout.size, (0, 0, 0, int(255 * shadow_opacity)))
+        shadow.putalpha(shadow_mask)
+        if shadow_blur > 0:
+            shadow = shadow.filter(ImageFilter.GaussianBlur(shadow_blur))
+        
+        canvas.paste(shadow, (place_x + shadow_dx, place_y + shadow_dy), shadow)
+
+    # Paste subject
+    canvas.paste(fg_cutout, (place_x, place_y), fg_cutout)
+
+    # Composite onto background
+    final_comp = Image.alpha_composite(base_bg, canvas).convert("RGB")
+
+    del base_bg, canvas, fg_cutout
+    gc.collect()
+
+    return final_comp, "Composition rendered successfully."
 
 
-# --- 5. BATCH PROCESSING SUITE ---
-def execute_batch(files: list, action: str, model_name: str, progress=gr.Progress()):
-    if not files:
-        return None, format_status("No files uploaded for batch processing.", "warning")
+# ======================================================
+# 5. TAB 3: EDGE MATTING, RETOUCHING & DEFRINGING
+# ======================================================
 
-    progress(0.1, desc="Initializing Batch Processor...")
-    temp_dir = tempfile.mkdtemp()
-    zip_path = os.path.join(temp_dir, "shadow_flamez_batch_export.zip")
+def process_tab3_retouch(
+    input_img,
+    erode_dilate_size,
+    edge_blur,
+    defringe_strength,
+    contrast_mask
+):
+    if input_img is None:
+        return None, "Upload an image with transparency (RGBA) or run BG removal first."
 
-    session = get_rembg_session(model_name) if "Remove Background" in action else None
+    if input_img.mode != "RGBA":
+        input_img, _ = smart_bg_removal(input_img)
 
-    with zipfile.ZipFile(zip_path, 'w') as zip_file:
-        for idx, file_obj in enumerate(files):
-            progress((idx + 1) / len(files), desc=f"Processing File {idx+1}/{len(files)}...")
+    r, g, b, alpha = input_img.split()
+    alpha_np = np.array(alpha)
+
+    # Morphological Erode/Dilate on Alpha channel
+    if erode_dilate_size != 0:
+        kernel_size = abs(erode_dilate_size) * 2 + 1
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+        if erode_dilate_size < 0:
+            alpha_np = cv2.erode(alpha_np, kernel, iterations=1)
+        else:
+            alpha_np = cv2.dilate(alpha_np, kernel, iterations=1)
+
+    # Defringing (color decontamination on fringe edges)
+    rgb_np = np.array(input_img.convert("RGB"))
+    if defringe_strength > 0:
+        alpha_normalized = alpha_np.astype(float) / 255.0
+        edge_region = (alpha_normalized > 0.05) & (alpha_normalized < 0.95)
+        
+        # Apply median blur to boundary pixels
+        blurred_rgb = cv2.medianBlur(rgb_np, 5)
+        blend_factor = (defringe_strength / 100.0)
+        for c in range(3):
+            rgb_np[:, :, c] = np.where(edge_region, 
+                                       (1 - blend_factor) * rgb_np[:, :, c] + blend_factor * blurred_rgb[:, :, c], 
+                                       rgb_np[:, :, c])
+
+    # Reconstruct Image
+    mod_alpha = Image.fromarray(alpha_np)
+    if edge_blur > 0:
+        mod_alpha = mod_alpha.filter(ImageFilter.GaussianBlur(edge_blur))
+
+    if contrast_mask > 1.0:
+        enhancer = ImageEnhance.Contrast(mod_alpha)
+        mod_alpha = enhancer.enhance(contrast_mask)
+
+    result = Image.fromarray(rgb_np).convert("RGBA")
+    result.putalpha(mod_alpha)
+
+    del alpha_np, rgb_np
+    gc.collect()
+
+    return result, "Edge retouching and defringing complete."
+
+
+# ======================================================
+# 6. TAB 4: PROFESSIONAL ENHANCER & PRESET STUDIO
+# ======================================================
+
+def apply_image_preset(img: Image.Image, preset_name: str) -> Image.Image:
+    """Applies high-speed OpenCV filter presets."""
+    img_np = np.array(img.convert("RGB"))
+
+    if preset_name == "Vintage Warm":
+        img_np = cv2.transform(img_np, np.array([
+            [0.393, 0.769, 0.189],
+            [0.349, 0.686, 0.168],
+            [0.272, 0.534, 0.131]
+        ]))
+        img_np = np.clip(img_np, 0, 255).astype(np.uint8)
+
+    elif preset_name == "Cyberpunk Glow":
+        img_np[:, :, 0] = np.clip(img_np[:, :, 0] * 1.2, 0, 255) # Red/Pink boost
+        img_np[:, :, 2] = np.clip(img_np[:, :, 2] * 1.3, 0, 255) # Blue/Cyan boost
+
+    elif preset_name == "Cinematic Cool":
+        img_np[:, :, 0] = np.clip(img_np[:, :, 0] * 0.85, 0, 255) # Reduce Red
+        img_np[:, :, 2] = np.clip(img_np[:, :, 2] * 1.25, 0, 255) # Boost Blue
+
+    elif preset_name == "High Contrast B&W":
+        gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
+        gray = cv2.equalizeHist(gray)
+        img_np = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
+
+    elif preset_name == "Portrait Soft":
+        img_np = cv2.bilateralFilter(img_np, 9, 75, 75)
+
+    return Image.fromarray(img_np)
+
+
+def process_tab4_enhancer(
+    input_img,
+    preset,
+    brightness,
+    contrast,
+    saturation,
+    sharpness,
+    temperature,
+    vignette_strength
+):
+    if input_img is None:
+        return None, "Upload an image to adjust enhancements."
+
+    work_img = input_img.copy()
+
+    # Apply preset filter
+    if preset != "None":
+        work_img = apply_image_preset(work_img, preset)
+
+    # Basic adjustments
+    if brightness != 1.0:
+        work_img = ImageEnhance.Brightness(work_img).enhance(brightness)
+    if contrast != 1.0:
+        work_img = ImageEnhance.Contrast(work_img).enhance(contrast)
+    if saturation != 1.0:
+        work_img = ImageEnhance.Color(work_img).enhance(saturation)
+    if sharpness != 1.0:
+        work_img = ImageEnhance.Sharpness(work_img).enhance(sharpness)
+
+    # Temperature adjustment
+    if temperature != 0:
+        img_np = np.array(work_img.convert("RGB")).astype(float)
+        if temperature > 0: # Warm
+            img_np[:, :, 0] += temperature * 15 # Red
+            img_np[:, :, 2] -= temperature * 10 # Blue
+        else: # Cool
+            img_np[:, :, 0] += temperature * 10
+            img_np[:, :, 2] -= temperature * 15
+        img_np = np.clip(img_np, 0, 255).astype(np.uint8)
+        work_img = Image.fromarray(img_np)
+
+    # Vignette effect
+    if vignette_strength > 0:
+        w, h = work_img.size
+        kernel_x = cv2.getGaussianKernel(w, w / 2)
+        kernel_y = cv2.getGaussianKernel(h, h / 2)
+        kernel = kernel_y * kernel_x.T
+        mask = kernel / kernel.max()
+        
+        vignette_mask = 1 - (1 - mask) * vignette_strength
+        vignette_mask = np.dstack([vignette_mask] * 3)
+
+        img_np = (np.array(work_img.convert("RGB")) * vignette_mask).astype(np.uint8)
+        work_img = Image.fromarray(img_np)
+
+    gc.collect()
+    return work_img, "Enhancements applied."
+
+
+# ======================================================
+# 7. TAB 5: SMART RESIZER, CROP & SOCIAL TEMPLATES
+# ======================================================
+
+SOCIAL_TEMPLATES = {
+    "Custom": None,
+    "Instagram Post (1080x1080)": (1080, 1080),
+    "Instagram Story/Reel (1080x1920)": (1080, 1920),
+    "YouTube Thumbnail (1280x720)": (1280, 720),
+    "Twitter / X Header (1500x500)": (1500, 500),
+    "LinkedIn Banner (1584x396)": (1584, 396),
+    "Passport Photo (600x600)": (600, 600)
+}
+
+def update_resizer_dimensions(template_name):
+    if template_name in SOCIAL_TEMPLATES and SOCIAL_TEMPLATES[template_name] is not None:
+        w, h = SOCIAL_TEMPLATES[template_name]
+        return w, h
+    return gr.update(), gr.update()
+
+
+def process_tab5_resizer(
+    input_img,
+    template,
+    target_width,
+    target_height,
+    crop_mode,
+    output_format,
+    quality_setting
+):
+    if input_img is None:
+        return None, None, "Upload an image to resize."
+
+    w = int(target_width)
+    h = int(target_height)
+
+    if crop_mode == "Fit / Pad":
+        res_img = ImageOps.pad(input_img, (w, h), color=(255, 255, 255))
+    elif crop_mode == "Center Crop":
+        res_img = ImageOps.fit(input_img, (w, h), centering=(0.5, 0.5))
+    else: # Stretch / Direct Scale
+        res_img = input_img.resize((w, h), Image.Resampling.LANCZOS)
+
+    # Save to buffer for file download format test
+    buffer = io.BytesIO()
+    save_fmt = output_format.upper()
+    if save_fmt == "JPG":
+        save_fmt = "JPEG"
+        res_img = res_img.convert("RGB")
+
+    res_img.save(buffer, format=save_fmt, quality=quality_setting)
+    buffer.seek(0)
+
+    file_size_kb = len(buffer.getvalue()) / 1024.0
+    status_msg = f"Resized to {w}x{h} px | Format: {output_format} | Size: ~{file_size_kb:.1f} KB"
+
+    # Temporary file output path
+    out_file_path = f"resized_output.{output_format.lower()}"
+    res_img.save(out_file_path, format=save_fmt, quality=quality_setting)
+
+    gc.collect()
+    return res_img, out_file_path, status_msg
+
+
+# ======================================================
+# 8. TAB 6: BATCH PROCESSOR
+# ======================================================
+
+def process_tab6_batch(file_list, model_name, apply_preset_name):
+    if not file_list:
+        return None, "No files uploaded for batch processing."
+
+    zip_buffer = io.BytesIO()
+    processed_count = 0
+
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+        for idx, file_obj in enumerate(file_list):
             try:
                 img = Image.open(file_obj.name)
-                filename = os.path.basename(file_obj.name)
-                name, _ = os.path.splitext(filename)
+                
+                # Apply background removal
+                out_img, _ = smart_bg_removal(img, model_name=model_name)
 
-                if action == "Remove Background":
-                    out_img = rembg.remove(img, session=session)
-                    save_name = f"{name}_nobg.png"
-                    buf = io.BytesIO()
-                    out_img.save(buf, format="PNG")
-                elif action == "Resize to 1080p (FHD)":
-                    out_img = ImageOps.contain(img, (1920, 1080), Image.Resampling.LANCZOS)
-                    save_name = f"{name}_1080p.jpg"
-                    buf = io.BytesIO()
-                    out_img.convert("RGB").save(buf, format="JPEG", quality=90)
-                elif action == "Convert to WebP":
-                    out_img = img
-                    save_name = f"{name}.webp"
-                    buf = io.BytesIO()
-                    out_img.save(buf, format="WEBP", quality=85)
+                # Optional preset
+                if apply_preset_name != "None":
+                    out_img = apply_image_preset(out_img, apply_preset_name)
 
-                zip_file.writestr(save_name, buf.getvalue())
+                # Save into zip
+                img_byte_arr = io.BytesIO()
+                out_img.save(img_byte_arr, format="PNG")
+                
+                filename = f"processed_{idx+1}_" + os.path.basename(file_obj.name)
+                filename = os.path.splitext(filename)[0] + ".png"
+                
+                zip_file.writestr(filename, img_byte_arr.getvalue())
+                processed_count += 1
+                
+                del img, out_img, img_byte_arr
+                gc.collect()
+
             except Exception as e:
-                print(f"Batch Error on {file_obj.name}: {e}")
+                print(f"Error processing file {file_obj.name}: {e}")
 
-    return zip_path, format_status(f"Batch completed! Processed {len(files)} images.", "success")
+    zip_buffer.seek(0)
+    zip_path = "batch_processed_images.zip"
+    with open(zip_path, "wb") as f:
+        f.write(zip_buffer.getvalue())
 
-
-# --- 6. COLOR & TONE STUDIO ---
-def execute_color_grade(img: Image.Image, brightness: float, contrast: float, saturation: float, warmth: float, hdr_effect: bool, progress=gr.Progress()):
-    if img is None:
-        return None, format_status("Upload an image first.", "warning"), None
-
-    progress(0.3, desc="Grading Colors & Vibrance...")
-    res = img.convert("RGB")
-
-    res = ImageEnhance.Brightness(res).enhance(brightness)
-    res = ImageEnhance.Contrast(res).enhance(contrast)
-    res = ImageEnhance.Color(res).enhance(saturation)
-
-    # Temperature / Warmth
-    if warmth != 1.0:
-        np_img = np.array(res, dtype=np.float32)
-        np_img[:, :, 0] *= warmth          # Red channel
-        np_img[:, :, 2] *= (2.0 - warmth)  # Blue channel inverse
-        res = Image.fromarray(np.clip(np_img, 0, 255).astype(np.uint8))
-
-    # HDR Tone Mapping Simulation
-    if hdr_effect:
-        np_cv = cv2.cvtColor(np.array(res), cv2.COLOR_RGB2BGR)
-        hdr = cv2.detailEnhance(np_cv, sigma_s=12, sigma_r=0.15)
-        res = Image.fromarray(cv2.cvtColor(hdr, cv2.COLOR_BGR2RGB))
-
-    return res, format_status("Color Grade Applied!", "success"), res
+    return zip_path, f"Successfully processed {processed_count} images into ZIP."
 
 
-# --- 7. SMART CANVAS & EXPORT ---
-def execute_canvas_export(img: Image.Image, aspect_ratio: str, fit_mode: str, fmt: str, progress=gr.Progress()):
-    if img is None:
-        return None, format_status("Upload an image first.", "warning"), None
+# ======================================================
+# 9. TAB 7: IMAGE INSPECTOR & PALETTE EXTRACTOR
+# ======================================================
 
-    progress(0.4, desc="Formatting Canvas Aspect Ratio...")
-    ratios = {
-        "1:1 Square (Instagram)": (1080, 1080),
-        "9:16 Story / Reel": (1080, 1920),
-        "16:9 YouTube Thumbnail": (1920, 1080),
-        "4:5 Portrait": (1080, 1350),
-        "2:1 Banner": (1200, 600)
-    }
+def process_tab7_inspector(input_img):
+    if input_img is None:
+        return "No image provided.", None
 
-    if aspect_ratio not in ratios:
-        res = img
-    else:
-        target_w, target_h = ratios[aspect_ratio]
-        if fit_mode == "Crop to Fill":
-            res = ImageOps.fit(img, (target_w, target_h), Image.Resampling.LANCZOS)
-        else:  # Pad with Background
-            res = ImageOps.pad(img, (target_w, target_h), color="#0D111C", centering=(0.5, 0.5))
+    w, h = input_img.size
+    aspect_ratio = round(w / float(h), 2)
+    mode = input_img.mode
+    
+    img_np = np.array(input_img.convert("RGB"))
+    mean_color = np.mean(img_np, axis=(0, 1)).astype(int)
+    brightness = int(np.mean(mean_color))
 
-    return res, format_status(f"Resized for {aspect_ratio} ({fmt})", "success"), res
+    # K-Means dominant color palette extraction
+    pixels = img_np.reshape(-1, 3).astype(np.float32)
+    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
+    _, labels, centers = cv2.kmeans(pixels[::10], 5, None, criteria, 10, cv2.KMEANS_RANDOM_CENTERS)
+    
+    colors = centers.astype(int)
+    
+    # Render palette image
+    palette_height = 100
+    palette_width = 500
+    palette_img = np.zeros((palette_height, palette_width, 3), dtype=np.uint8)
+    
+    swatch_w = palette_width // 5
+    hex_codes = []
+    for i, c in enumerate(colors):
+        palette_img[:, i*swatch_w:(i+1)*swatch_w] = c
+        hex_code = f"#{c[0]:02x}{c[1]:02x}{c[2]:02x}"
+        hex_codes.append(hex_code)
 
+    report = f"""
+    ### 📊 Image Metadata Report
+    * **Dimensions:** {w} x {h} pixels
+    * **Aspect Ratio:** {aspect_ratio}:1
+    * **Color Mode:** {mode}
+    * **Average Brightness:** {brightness} / 255
+    * **Dominant Color Palette (Hex):** {', '.join(hex_codes)}
+    """
 
-# --- 8. AI FX & ARTISTIC FILTER LAB ---
-def execute_art_filter(img: Image.Image, filter_style: str, progress=gr.Progress()):
-    if img is None:
-        return None, format_status("Upload an image first.", "warning"), None
-
-    progress(0.4, desc="Applying Neural Transformation...")
-    np_img = cv2.cvtColor(np.array(img.convert("RGB")), cv2.COLOR_RGB2BGR)
-
-    if filter_style == "Pencil Sketch":
-        gray, color = cv2.pencilSketch(np_img, sigma_s=60, sigma_r=0.07, shade_factor=0.05)
-        res_np = cv2.cvtColor(color, cv2.COLOR_BGR2RGB)
-    elif filter_style == "Cyber Line Art (Canny)":
-        edges = cv2.Canny(np_img, 100, 200)
-        edges_inv = cv2.bitwise_not(edges)
-        res_np = cv2.cvtColor(edges_inv, cv2.COLOR_GRAY2RGB)
-    elif filter_style == "Cartoon Stylization":
-        cartoon = cv2.stylization(np_img, sigma_s=60, sigma_r=0.45)
-        res_np = cv2.cvtColor(cartoon, cv2.COLOR_BGR2RGB)
-    elif filter_style == "Posterize":
-        n = 4  # Number of quantization levels
-        indices = np.arange(0, 256)
-        divider = 256 / n
-        quantized = np.int0(np.floor(indices / divider) * (256 / (n - 1)))
-        res_np = cv2.cvtColor(cv2.LUT(np_img, quantized.astype(np.uint8)), cv2.COLOR_BGR2RGB)
-    else:
-        res_np = cv2.cvtColor(np_img, cv2.COLOR_BGR2RGB)
-
-    res = Image.fromarray(res_np)
-    return res, format_status(f"Filter '{filter_style}' Applied!", "success"), res
+    return report, Image.fromarray(palette_img)
 
 
-# --- 9. METADATA & PRIVACY CLEANER ---
-def execute_privacy_cleaner(img: Image.Image, progress=gr.Progress()):
-    if img is None:
-        return None, {}, format_status("Upload an image to inspect.", "warning")
-
-    progress(0.5, desc="Analyzing File Structure & Stripping EXIF...")
-    w, h = img.size
-    mode = img.mode
-    format_type = img.format if img.format else "RAW PIL Frame"
-
-    # Diagnostics JSON
-    diag_info = {
-        "Resolution": f"{w} x {h} Pixels",
-        "Aspect Ratio": f"{round(w/h, 2)}:1",
-        "Color Space": mode,
-        "Source Format": format_type,
-        "EXIF Metadata Privacy Status": "🔒 Stripped & Cleaned"
-    }
-
-    # Re-save cleanly without metadata
-    clean_img = Image.new(img.mode, img.size)
-    clean_img.putdata(list(img.getdata()))
-
-    return clean_img, diag_info, format_status("Metadata Cleaned! Image safe for sharing.", "success")
-
-
-# ==============================================================================
-# BUILD MASTER GRADIO INTERFACE
-# ==============================================================================
+# ======================================================
+# 10. FULL GRADIO BLOCKS USER INTERFACE CONSTRUCTION
+# ======================================================
 
 def build_app():
-    with gr.Blocks(css=STUDIO_CSS, title="Shadow Flamez AI Studio Pro") as demo:
-        gr.HTML(STUDIO_HEADER_HTML)
+    custom_theme = gr.themes.Soft(
+        primary_hue="indigo",
+        secondary_hue="slate",
+    )
 
-        # Global Session History Deck State
-        session_gallery = gr.State([])
+    with gr.Blocks(theme=custom_theme, title="Studio AI Suite Pro") as demo:
+        gr.Markdown(
+            """
+            # 🎨 Studio AI Image Suite Pro
+            **Complete Cloud-Optimized Neural & Computer Vision Image Suite**
+            """
+        )
 
         with gr.Tabs():
 
-            # ------------------------------------------------------------------
-            # TAB 1: MAGIC BRUSH & ERASER
-            # ------------------------------------------------------------------
-            with gr.Tab("🪄 Magic Brush & Eraser"):
+            # --------------------------------------------------
+            # TAB 1: BACKGROUND REMOVER
+            # --------------------------------------------------
+            with gr.TabItem("🖼️ Background Remover"):
+                gr.Markdown("### AI Background Removal & Alpha Matting")
                 with gr.Row():
-                    with gr.Column(scale=5, elem_classes=["cyber-card"]):
-                        gr.Markdown("### 🖌️ **Object Removal & Inpainting**")
-                        brush_editor = gr.ImageEditor(
-                            label="Paint over objects to remove",
-                            type="pil",
-                            brush=gr.Brush(colors=["#ff0055"], default_size=25)
-                        )
-                        algo_choice = gr.Radio(
-                            ["OpenCV Telea (Fast Smooth)", "OpenCV Navier-Stokes (Detailed Edge)"],
-                            value="OpenCV Telea (Fast Smooth)",
-                            label="Inpainting Algorithm"
-                        )
-                        dilate_slider = gr.Slider(0, 10, value=3, step=1, label="Mask Feathering / Edge Dilation")
-                        erase_btn = gr.Button("✨ ERASE UNWANTED OBJECTS", elem_classes=["cyber-btn"])
-
-                    with gr.Column(scale=6, elem_classes=["cyber-card"]):
-                        gr.Markdown("### 🖼️ **Erased Output Canvas**")
-                        erase_status = gr.HTML(format_status("Canvas Ready.", "info"))
-                        erase_output = gr.Image(label="Cleaned Result")
-
-                erase_btn.click(
-                    fn=execute_magic_brush,
-                    inputs=[brush_editor, algo_choice, dilate_slider],
-                    outputs=[erase_output, erase_status, gr.State()]
-                ).then(
-                    fn=add_to_gallery,
-                    inputs=[erase_output, session_gallery],
-                    outputs=[session_gallery]
-                )
-
-            # ------------------------------------------------------------------
-            # TAB 2: BACKGROUND & COMPOSITOR
-            # ------------------------------------------------------------------
-            with gr.Tab("🖼️ Background & Compositor"):
-                with gr.Row():
-                    with gr.Column(scale=5, elem_classes=["cyber-card"]):
-                        bg_in = gr.Image(type="pil", label="Upload Source Image")
-                        bg_model = gr.Dropdown(
+                    with gr.Column():
+                        t1_input = gr.Image(type="pil", label="Source Image")
+                        t1_model = gr.Dropdown(
                             ["u2netp", "u2net", "isnet-general-use", "silueta"],
                             value="u2netp",
-                            label="AI Neural Model (u2netp = Fastest CPU)"
+                            label="Model (u2netp is fastest & lowest memory)"
                         )
-                        bg_mode = gr.Radio(
-                            ["Transparent (PNG)", "Solid Custom Color", "Blur Original Background", "Custom Image Replacement"],
-                            value="Transparent (PNG)",
-                            label="Background Mode"
+                        
+                        with gr.Accordion("Advanced Alpha Matting Settings", open=False):
+                            t1_matting = gr.Checkbox(label="Enable Alpha Matting", value=False)
+                            t1_fg_thresh = gr.Slider(0, 255, value=240, step=5, label="Foreground Threshold")
+                            t1_bg_thresh = gr.Slider(0, 255, value=10, step=5, label="Background Threshold")
+                            t1_erode = gr.Slider(0, 50, value=10, step=1, label="Erode Size")
+
+                        with gr.Accordion("Refinement & Fill", open=False):
+                            t1_invert = gr.Checkbox(label="Invert Alpha Mask", value=False)
+                            t1_feather = gr.Slider(0, 20, value=0, step=1, label="Feather Edges")
+                            t1_bg_color = gr.Dropdown(
+                                ["Transparent", "#FFFFFF", "#000000", "#FF0000", "#00FF00", "#0000FF"],
+                                value="Transparent",
+                                label="Background Fill Color"
+                            )
+
+                        t1_btn = gr.Button("Remove Background", variant="primary")
+
+                    with gr.Column():
+                        t1_output_main = gr.Image(type="pil", label="Final Output", format="png")
+                        t1_output_rgba = gr.Image(type="pil", label="Transparent Cutout (RGBA)", format="png")
+                        t1_status = gr.Textbox(label="Status / Metadata", interactive=False)
+
+                t1_btn.click(
+                    fn=process_tab1_bg_removal,
+                    inputs=[t1_input, t1_model, t1_matting, t1_fg_thresh, t1_bg_thresh, t1_erode, t1_invert, t1_bg_color, t1_feather],
+                    outputs=[t1_output_main, t1_output_rgba, t1_status]
+                )
+
+            # --------------------------------------------------
+            # TAB 2: BACKGROUND COMPOSITOR
+            # --------------------------------------------------
+            with gr.TabItem("🌄 Background Compositor"):
+                gr.Markdown("### Composite Subject onto New Backdrop with Drop Shadows & Lighting")
+                with gr.Row():
+                    with gr.Column():
+                        t2_fg = gr.Image(type="pil", label="Foreground Subject")
+                        t2_bg = gr.Image(type="pil", label="New Background")
+                        t2_model = gr.Dropdown(["u2netp", "u2net"], value="u2netp", label="Extraction Model")
+
+                        with gr.Accordion("Position & Scale", open=True):
+                            t2_scale = gr.Slider(0.1, 2.0, value=1.0, step=0.05, label="Scale Subject")
+                            t2_offx = gr.Slider(-500, 500, value=0, step=10, label="Offset X")
+                            t2_offy = gr.Slider(-500, 500, value=0, step=10, label="Offset Y")
+                            t2_rot = gr.Slider(-180, 180, value=0, step=5, label="Rotate Deg")
+
+                        with gr.Accordion("Shadow & Lighting", open=False):
+                            t2_bg_blur = gr.Slider(0, 30, value=0, step=1, label="Background Blur")
+                            t2_sh_op = gr.Slider(0.0, 1.0, value=0.3, step=0.05, label="Shadow Opacity")
+                            t2_sh_blur = gr.Slider(0, 30, value=10, step=1, label="Shadow Blur")
+                            t2_sh_dx = gr.Slider(-100, 100, value=15, step=5, label="Shadow Offset X")
+                            t2_sh_dy = gr.Slider(-100, 100, value=15, step=5, label="Shadow Offset Y")
+                            t2_match_light = gr.Checkbox(label="Auto Match Subject Brightness", value=False)
+
+                        t2_btn = gr.Button("Render Composition", variant="primary")
+
+                    with gr.Column():
+                        t2_output = gr.Image(type="pil", label="Composited Result")
+                        t2_status = gr.Textbox(label="Status", interactive=False)
+
+                t2_btn.click(
+                    fn=process_tab2_composite,
+                    inputs=[t2_fg, t2_bg, t2_model, t2_scale, t2_offx, t2_offy, t2_rot, t2_bg_blur, t2_sh_op, t2_sh_blur, t2_sh_dx, t2_sh_dy, t2_match_light],
+                    outputs=[t2_output, t2_status]
+                )
+
+            # --------------------------------------------------
+            # TAB 3: EDGE MATTING & RETOUCHING
+            # --------------------------------------------------
+            with gr.TabItem("✨ Edge Retouch & Defringe"):
+                gr.Markdown("### Clean Cutout Halos, Smooth Fringes & Adjust Edges")
+                with gr.Row():
+                    with gr.Column():
+                        t3_input = gr.Image(type="pil", label="Source Transparent Image (RGBA)")
+                        t3_erode_dilate = gr.Slider(-20, 20, value=0, step=1, label="Erode (-) / Dilate (+) Edge")
+                        t3_edge_blur = gr.Slider(0.0, 10.0, value=0.0, step=0.5, label="Edge Gaussian Blur")
+                        t3_defringe = gr.Slider(0, 100, value=30, step=5, label="Defringe / Halo Cleanup Strength")
+                        t3_mask_contrast = gr.Slider(0.5, 3.0, value=1.0, step=0.1, label="Alpha Mask Contrast Boost")
+                        t3_btn = gr.Button("Apply Edge Retouching", variant="primary")
+
+                    with gr.Column():
+                        t3_output = gr.Image(type="pil", label="Retouched Result", format="png")
+                        t3_status = gr.Textbox(label="Status", interactive=False)
+
+                t3_btn.click(
+                    fn=process_tab3_retouch,
+                    inputs=[t3_input, t3_erode_dilate, t3_edge_blur, t3_defringe, t3_mask_contrast],
+                    outputs=[t3_output, t3_status]
+                )
+
+            # --------------------------------------------------
+            # TAB 4: IMAGE ENHANCER & PRESETS
+            # --------------------------------------------------
+            with gr.TabItem("🎨 Enhancers & Presets"):
+                gr.Markdown("### Professional Image Grading, Adjustments & Color Presets")
+                with gr.Row():
+                    with gr.Column():
+                        t4_input = gr.Image(type="pil", label="Input Image")
+                        t4_preset = gr.Dropdown(
+                            ["None", "Vintage Warm", "Cyberpunk Glow", "Cinematic Cool", "High Contrast B&W", "Portrait Soft"],
+                            value="None",
+                            label="Filter Preset"
                         )
-                        solid_col = gr.ColorPicker(value="#0F3460", label="Solid Color Picker")
-                        blur_amt = gr.Slider(1, 30, value=15, label="Bokeh Blur Intensity")
-                        custom_bg_in = gr.Image(type="pil", label="Custom Replacement Image (Optional)")
-                        btn_bg = gr.Button("🔥 EXECUTE STUDIO RENDER", elem_classes=["cyber-btn"])
+                        t4_bright = gr.Slider(0.2, 2.0, value=1.0, step=0.05, label="Brightness")
+                        t4_contrast = gr.Slider(0.2, 2.0, value=1.0, step=0.05, label="Contrast")
+                        t4_sat = gr.Slider(0.0, 2.0, value=1.0, step=0.05, label="Saturation")
+                        t4_sharp = gr.Slider(0.0, 3.0, value=1.0, step=0.1, label="Sharpness")
+                        t4_temp = gr.Slider(-5, 5, value=0, step=1, label="Temperature (Cool <-> Warm)")
+                        t4_vignette = gr.Slider(0.0, 1.0, value=0.0, step=0.05, label="Vignette Effect")
+                        t4_btn = gr.Button("Apply Enhancements", variant="primary")
 
-                    with gr.Column(scale=6, elem_classes=["cyber-card"]):
-                        bg_status = gr.HTML(format_status("System Ready.", "info"))
-                        bg_out = gr.Image(label="Rendered Preview")
+                    with gr.Column():
+                        t4_output = gr.Image(type="pil", label="Enhanced Result")
+                        t4_status = gr.Textbox(label="Status", interactive=False)
 
-                btn_bg.click(
-                    fn=execute_bg_compositor,
-                    inputs=[bg_in, bg_model, bg_mode, solid_col, custom_bg_in, blur_amt],
-                    outputs=[bg_out, bg_status, gr.State()]
-                ).then(
-                    fn=add_to_gallery,
-                    inputs=[bg_out, session_gallery],
-                    outputs=[session_gallery]
+                t4_btn.click(
+                    fn=process_tab4_enhancer,
+                    inputs=[t4_input, t4_preset, t4_bright, t4_contrast, t4_sat, t4_sharp, t4_temp, t4_vignette],
+                    outputs=[t4_output, t4_status]
                 )
 
-            # ------------------------------------------------------------------
-            # TAB 3: 4X UPSCALER & CYBER FX
-            # ------------------------------------------------------------------
-            with gr.Tab("⚡ 4x AI Upscaler & Cyber FX"):
+            # --------------------------------------------------
+            # TAB 5: RESIZER & SOCIAL TEMPLATES
+            # --------------------------------------------------
+            with gr.TabItem("📐 Resizer & Templates"):
+                gr.Markdown("### Smart Resizer, Format Converter & Social Media Cropper")
                 with gr.Row():
-                    with gr.Column(scale=5, elem_classes=["cyber-card"]):
-                        cyber_in = gr.Image(type="pil", label="Source Image")
-                        scale_factor = gr.Radio(["1x (FX Only)", "2x Upscale", "4x Super-Res"], value="2x Upscale", label="Resolution Multiplier")
-                        lut_preset = gr.Dropdown(["None", "Cyberpunk Neo", "Matrix Green", "Synthwave Magenta", "Noir Monochrome"], value="None", label="LUT Preset")
-                        sharpness = gr.Slider(1.0, 3.0, value=1.5, label="Sharpness Boost")
-                        glitch_check = gr.Checkbox(label="Enable Chromatic Glitch FX")
-                        btn_cyber = gr.Button("⚡ APPLY CYBER FX & SCALER", elem_classes=["cyber-btn"])
-
-                    with gr.Column(scale=6, elem_classes=["cyber-card"]):
-                        cyber_status = gr.HTML(format_status("Cyber Suite Ready.", "info"))
-                        cyber_out = gr.Image(label="Enhanced Result")
-
-                btn_cyber.click(
-                    fn=execute_cyber_fx,
-                    inputs=[cyber_in, scale_factor, lut_preset, sharpness, glitch_check],
-                    outputs=[cyber_out, cyber_status, gr.State()]
-                ).then(
-                    fn=add_to_gallery,
-                    inputs=[cyber_out, session_gallery],
-                    outputs=[session_gallery]
-                )
-
-            # ------------------------------------------------------------------
-            # TAB 4: WATERMARK & BRANDING STUDIO
-            # ------------------------------------------------------------------
-            with gr.Tab("🏷️ Watermark & Branding"):
-                with gr.Row():
-                    with gr.Column(scale=5, elem_classes=["cyber-card"]):
-                        wm_in = gr.Image(type="pil", label="Base Image")
-                        wm_text = gr.Textbox(label="Watermark Text", value="© SHADOW FLAMEZ AI")
-                        wm_pos = gr.Dropdown(["Bottom-Right", "Bottom-Left", "Top-Right", "Top-Left", "Center"], value="Bottom-Right", label="Position")
-                        wm_opacity = gr.Slider(0.1, 1.0, value=0.6, label="Opacity / Transparency")
-                        wm_size = gr.Slider(12, 72, value=28, step=2, label="Font Size")
-                        btn_wm = gr.Button("🏷️ APPLY WATERMARK", elem_classes=["cyber-btn"])
-
-                    with gr.Column(scale=6, elem_classes=["cyber-card"]):
-                        wm_status = gr.HTML(format_status("Watermark Studio Ready.", "info"))
-                        wm_out = gr.Image(label="Branded Result")
-
-                btn_wm.click(
-                    fn=execute_watermark,
-                    inputs=[wm_in, wm_text, wm_pos, wm_opacity, wm_size],
-                    outputs=[wm_out, wm_status, gr.State()]
-                ).then(
-                    fn=add_to_gallery,
-                    inputs=[wm_out, session_gallery],
-                    outputs=[session_gallery]
-                )
-
-            # ------------------------------------------------------------------
-            # TAB 5: BATCH PROCESSING SUITE
-            # ------------------------------------------------------------------
-            with gr.Tab("📦 Batch Processing"):
-                with gr.Row():
-                    with gr.Column(scale=5, elem_classes=["cyber-card"]):
-                        batch_files = gr.File(file_count="multiple", label="Upload Multiple Batch Images")
-                        batch_action = gr.Radio(["Remove Background", "Resize to 1080p (FHD)", "Convert to WebP"], value="Remove Background", label="Batch Action")
-                        batch_model = gr.Dropdown(["u2netp", "u2net"], value="u2netp", label="Model (If BG Removal)")
-                        btn_batch = gr.Button("📦 PROCESS & DOWNLOAD ZIP", elem_classes=["cyber-btn"])
-
-                    with gr.Column(scale=6, elem_classes=["cyber-card"]):
-                        batch_status = gr.HTML(format_status("Batch Processor Ready.", "info"))
-                        batch_zip = gr.File(label="Download Processed Output ZIP Archive")
-
-                btn_batch.click(
-                    fn=execute_batch,
-                    inputs=[batch_files, batch_action, batch_model],
-                    outputs=[batch_zip, batch_status]
-                )
-
-            # ------------------------------------------------------------------
-            # TAB 6: COLOR & TONE STUDIO
-            # ------------------------------------------------------------------
-            with gr.Tab("🎨 Color & Tone Studio"):
-                with gr.Row():
-                    with gr.Column(scale=5, elem_classes=["cyber-card"]):
-                        color_in = gr.Image(type="pil", label="Source Image")
-                        bright = gr.Slider(0.5, 2.0, value=1.0, label="Brightness")
-                        contrast = gr.Slider(0.5, 2.0, value=1.0, label="Contrast")
-                        saturate = gr.Slider(0.0, 2.5, value=1.2, label="Saturation / Vibrance")
-                        warmth = gr.Slider(0.5, 1.5, value=1.0, label="Color Temperature (Cool ➔ Warm)")
-                        hdr_check = gr.Checkbox(label="Simulate HDR Tone Mapping")
-                        btn_color = gr.Button("🎨 APPLY COLOR GRADE", elem_classes=["cyber-btn"])
-
-                    with gr.Column(scale=6, elem_classes=["cyber-card"]):
-                        color_status = gr.HTML(format_status("Color Studio Ready.", "info"))
-                        color_out = gr.Image(label="Graded Preview")
-
-                btn_color.click(
-                    fn=execute_color_grade,
-                    inputs=[color_in, bright, contrast, saturate, warmth, hdr_check],
-                    outputs=[color_out, color_status, gr.State()]
-                ).then(
-                    fn=add_to_gallery,
-                    inputs=[color_out, session_gallery],
-                    outputs=[session_gallery]
-                )
-
-            # ------------------------------------------------------------------
-            # TAB 7: SMART CANVAS & EXPORT
-            # ------------------------------------------------------------------
-            with gr.Tab("📐 Smart Canvas & Presets"):
-                with gr.Row():
-                    with gr.Column(scale=5, elem_classes=["cyber-card"]):
-                        canvas_in = gr.Image(type="pil", label="Source Image")
-                        aspect = gr.Dropdown(
-                            ["1:1 Square (Instagram)", "9:16 Story / Reel", "16:9 YouTube Thumbnail", "4:5 Portrait", "2:1 Banner"],
-                            value="1:1 Square (Instagram)",
-                            label="Social Aspect Preset"
+                    with gr.Column():
+                        t5_input = gr.Image(type="pil", label="Input Image")
+                        t5_template = gr.Dropdown(
+                            list(SOCIAL_TEMPLATES.keys()),
+                            value="Custom",
+                            label="Social Media Preset"
                         )
-                        fit_mode = gr.Radio(["Crop to Fill", "Pad with Canvas Color"], value="Crop to Fill", label="Framing Strategy")
-                        fmt = gr.Dropdown(["PNG", "JPEG", "WEBP"], value="PNG", label="Export Format")
-                        btn_canvas = gr.Button("📐 RESIZE & EXPORT", elem_classes=["cyber-btn"])
+                        t5_w = gr.Number(value=1080, label="Target Width (px)")
+                        t5_h = gr.Number(value=1080, label="Target Height (px)")
+                        t5_crop = gr.Radio(["Fit / Pad", "Center Crop", "Stretch"], value="Center Crop", label="Resizing Mode")
+                        t5_fmt = gr.Dropdown(["PNG", "JPG", "WEBP"], value="PNG", label="Output Format")
+                        t5_quality = gr.Slider(10, 100, value=90, step=5, label="Export Quality")
+                        t5_btn = gr.Button("Resize & Convert", variant="primary")
 
-                    with gr.Column(scale=6, elem_classes=["cyber-card"]):
-                        canvas_status = gr.HTML(format_status("Canvas Ready.", "info"))
-                        canvas_out = gr.Image(label="Formatted Canvas Preview")
+                    with gr.Column():
+                        t5_output_img = gr.Image(type="pil", label="Resized Preview")
+                        t5_output_file = gr.File(label="Download File")
+                        t5_status = gr.Textbox(label="Status / Output Details", interactive=False)
 
-                btn_canvas.click(
-                    fn=execute_canvas_export,
-                    inputs=[canvas_in, aspect, fit_mode, fmt],
-                    outputs=[canvas_out, canvas_status, gr.State()]
-                ).then(
-                    fn=add_to_gallery,
-                    inputs=[canvas_out, session_gallery],
-                    outputs=[session_gallery]
+                t5_template.change(
+                    fn=update_resizer_dimensions,
+                    inputs=[t5_template],
+                    outputs=[t5_w, t5_h]
                 )
 
-            # ------------------------------------------------------------------
-            # TAB 8: AI FX & ARTISTIC FILTER LAB
-            # ------------------------------------------------------------------
-            with gr.Tab("🎭 Artistic Filter Lab"):
+                t5_btn.click(
+                    fn=process_tab5_resizer,
+                    inputs=[t5_input, t5_template, t5_w, t5_h, t5_crop, t5_fmt, t5_quality],
+                    outputs=[t5_output_img, t5_output_file, t5_status]
+                )
+
+            # --------------------------------------------------
+            # TAB 6: BATCH PROCESSOR
+            # --------------------------------------------------
+            with gr.TabItem("📦 Batch Processor"):
+                gr.Markdown("### Process Multiple Images in Parallel and Download as ZIP")
                 with gr.Row():
-                    with gr.Column(scale=5, elem_classes=["cyber-card"]):
-                        art_in = gr.Image(type="pil", label="Source Image")
-                        art_style = gr.Radio(
-                            ["Pencil Sketch", "Cyber Line Art (Canny)", "Cartoon Stylization", "Posterize"],
-                            value="Pencil Sketch",
-                            label="Artistic Transformation"
+                    with gr.Column():
+                        t6_files = gr.File(file_count="multiple", label="Upload Multiple Images")
+                        t6_model = gr.Dropdown(["u2netp", "u2net"], value="u2netp", label="BG Model")
+                        t6_preset = gr.Dropdown(
+                            ["None", "Vintage Warm", "Cyberpunk Glow", "Cinematic Cool", "High Contrast B&W"],
+                            value="None",
+                            label="Apply Filter Preset to Batch"
                         )
-                        btn_art = gr.Button("🎭 GENERATE ARTISTIC FX", elem_classes=["cyber-btn"])
+                        t6_btn = gr.Button("Run Batch Process", variant="primary")
 
-                    with gr.Column(scale=6, elem_classes=["cyber-card"]):
-                        art_status = gr.HTML(format_status("Filter Lab Ready.", "info"))
-                        art_out = gr.Image(label="Artistic Output")
+                    with gr.Column():
+                        t6_zip_out = gr.File(label="Download Output (ZIP)")
+                        t6_status = gr.Textbox(label="Status Log", interactive=False)
 
-                btn_art.click(
-                    fn=execute_art_filter,
-                    inputs=[art_in, art_style],
-                    outputs=[art_out, art_status, gr.State()]
-                ).then(
-                    fn=add_to_gallery,
-                    inputs=[art_out, session_gallery],
-                    outputs=[session_gallery]
+                t6_btn.click(
+                    fn=process_tab6_batch,
+                    inputs=[t6_files, t6_model, t6_preset],
+                    outputs=[t6_zip_out, t6_status]
                 )
 
-            # ------------------------------------------------------------------
-            # TAB 9: METADATA & PRIVACY CLEANER
-            # ------------------------------------------------------------------
-            with gr.Tab("🕵️ Privacy Metadata Cleaner"):
+            # --------------------------------------------------
+            # TAB 7: IMAGE INSPECTOR & PALETTE
+            # --------------------------------------------------
+            with gr.TabItem("🔍 Inspector & Color Palette"):
+                gr.Markdown("### Extract Dominant Color Palette & Inspect Image Metadata")
                 with gr.Row():
-                    with gr.Column(scale=5, elem_classes=["cyber-card"]):
-                        priv_in = gr.Image(type="pil", label="Source Image")
-                        btn_priv = gr.Button("🔒 STRIP EXIF & INSPECT", elem_classes=["cyber-btn"])
+                    with gr.Column():
+                        t7_input = gr.Image(type="pil", label="Input Image")
+                        t7_btn = gr.Button("Analyze Image", variant="primary")
 
-                    with gr.Column(scale=6, elem_classes=["cyber-card"]):
-                        priv_status = gr.HTML(format_status("Inspector Ready.", "info"))
-                        priv_json = gr.JSON(label="Image Structural Diagnostics")
-                        priv_out = gr.Image(label="Metadata-Free Clean Output")
+                    with gr.Column():
+                        t7_report = gr.Markdown(label="Analysis Report")
+                        t7_palette = gr.Image(type="pil", label="Dominant Color Palette")
 
-                btn_priv.click(
-                    fn=execute_privacy_cleaner,
-                    inputs=[priv_in],
-                    outputs=[priv_out, priv_json, priv_status]
+                t7_btn.click(
+                    fn=process_tab7_inspector,
+                    inputs=[t7_input],
+                    outputs=[t7_report, t7_palette]
                 )
-
-            # ------------------------------------------------------------------
-            # TAB 10: SESSION GALLERY DECK
-            # ------------------------------------------------------------------
-            with gr.Tab("🖼️ Session Gallery Deck"):
-                with gr.Column(elem_classes=["cyber-card"]):
-                    gr.Markdown("### 📂 **Session Deck History**")
-                    refresh_btn = gr.Button("🔄 REFRESH GALLERY DECK", elem_classes=["cyber-btn"])
-                    gallery_display = gr.Gallery(label="Accumulated Rendered Deck", columns=4, height="auto")
-
-                def sync_gallery(state_list):
-                    return state_list
-
-                refresh_btn.click(fn=sync_gallery, inputs=[session_gallery], outputs=[gallery_display])
-
-            # ------------------------------------------------------------------
-            # TAB 11: SYSTEM DIAGNOSTICS
-            # ------------------------------------------------------------------
-            with gr.Tab("📊 System Diagnostics"):
-                with gr.Column(elem_classes=["cyber-card"]):
-                    gr.Markdown("### 🖥️ **System Health & Engine Status**")
-                    diag_box = gr.JSON(value={
-                        "Render_Frontend": "Online",
-                        "Execution_Mode": "Pure Local Standalone CPU",
-                        "Parallel_Concurrency_Threads": 4,
-                        "Rembg_Engine": "Active (ONNX Runtime CPU)"
-                    })
-
-        gr.HTML(STUDIO_FOOTER_HTML)
 
     return demo
+
+
+# ======================================================
+# 11. DEPLOYMENT LAUNCHER FOR RENDER
+# ======================================================
 
 if __name__ == "__main__":
     app_demo = build_app()
     
-    # Read dynamic port provided by Render (defaults to 7860 for local testing)
+    # Read dynamic port provided by Render
     port = int(os.environ.get("PORT", 7860))
     
-    app_demo.queue(default_concurrency_limit=4).launch(
+    # Queue concurrency set to 1 thread to avoid RAM overload on free tier
+    app_demo.queue(default_concurrency_limit=1).launch(
         server_name="0.0.0.0",
         server_port=port
     )

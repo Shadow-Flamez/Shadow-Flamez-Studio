@@ -3,11 +3,10 @@ import io
 import gc
 import zipfile
 import numpy as np
-import cv2
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 import gradio as gr
-import onnxruntime as ort
-from rembg import remove, new_session
+
+# Keep top level light! Do NOT import cv2, rembg, or onnxruntime here.
 
 # ======================================================
 # 1. GLOBAL CONFIGURATION & ONNX CPU THREAD OPTIMIZATION

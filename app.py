@@ -654,11 +654,13 @@ def build_app():
 
     return demo
 
-
 if __name__ == "__main__":
     app_demo = build_app()
-    # Enable multi-threaded queue for smooth background execution
+    
+    # Read dynamic port provided by Render (defaults to 7860 for local testing)
+    port = int(os.environ.get("PORT", 7860))
+    
     app_demo.queue(default_concurrency_limit=4).launch(
         server_name="0.0.0.0",
-        server_port=7860
+        server_port=port
     )

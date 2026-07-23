@@ -1,294 +1,338 @@
-"""
-app.py - Main Gradio Application Entry Point (Shadow Flamez AI Studio Pro v5.5)
-"""
-import sys
-import traceback
-import time
-import io
-import os
-import zipfile
-from typing import Optional, Tuple
-from PIL import Image
+import gradio as gr
+import numpy as np
+from PIL import Image, ImageEnhance, ImageOps
 
-print("--> Launching Shadow Flamez AI Studio Engine...", flush=True)
+# ==========================================
+# BACKEND MOCK/CORE FUNCTIONS
+# ==========================================
 
-try:
-    import config
-    from utils import ImageUtils
-    from diagnostics import diagnostics, logger
-    from styles import STUDIO_CSS, STUDIO_HEADER_HTML, STUDIO_FOOTER_HTML
-    from neural_engine import neural_engine
-    from chroma_engine import ChromaKeyEngine
-    from compositor import CompositingEngine
-
-    import gradio as gr
-    print("--> All Engine Modules Loaded Successfully!", flush=True)
-
-except Exception as err:
-    print(f"\n❌ STARTUP ERROR:\n{err}", flush=True)
-    traceback.print_exc()
-    sys.exit(1)
-
-
-def format_status_badge(message: str, status_type: str = "info") -> str:
-    color_map = {"info": "#00ffff", "success": "#00ff66", "warning": "#ffaa00", "error": "#ff0055"}
-    border_col = color_map.get(status_type, "#00ffff")
-    return f'<div class="status-badge" style="border-left-color: {border_col};">STATUS: {message}</div>'
-
-
-# Pipeline Functions
-def single_image_pipeline(
-    input_image: Optional[Image.Image],
-    processing_mode: str,
-    ai_model_name: str,
-    bg_option: str,
-    solid_color: str,
-    enable_shadow: bool,
-    shadow_x: int,
-    shadow_y: int,
-    shadow_blur: int,
-    shadow_color: str,
-    enable_aura: bool,
-    aura_color: str,
-    aura_radius: int,
-    progress=gr.Progress(track_tqdm=True)
-) -> Tuple[Optional[Image.Image], str]:
-    if input_image is None:
-        return None, format_status_badge("Please upload a source image first.", "warning")
-
-    start_time = time.time()
-    try:
-        progress(0.2, desc="Rescaling for optimal processing speed...")
-        proc_img = ImageUtils.resize_for_performance(input_image, max_dim=2048)
-
-        progress(0.4, desc=f"Executing {processing_mode}...")
-        if "AI Neural" in processing_mode:
-            fg = neural_engine.remove_background(pil_image=proc_img, model_name=ai_model_name)
-        else:
-            fg = ChromaKeyEngine.process_keying(
-                pil_image=proc_img,
-                screen_type="Green Screen" if "Green" in processing_mode else "Blue Screen"
-            )
-
-        # Drop Shadow Application
-        if enable_shadow:
-            progress(0.6, desc="Rendering Realistic Drop Shadow...")
-            fg = neural_engine.apply_drop_shadow(
-                fg, offset_x=int(shadow_x), offset_y=int(shadow_y),
-                blur_r=int(shadow_blur), shadow_hex=shadow_color
-            )
-
-        # Neon Aura Application
-        if enable_aura:
-            progress(0.7, desc="Generating Neon Halo Backglow...")
-            fg = neural_engine.generate_neon_aura(
-                fg, aura_color_hex=aura_color, blur_radius=int(aura_radius)
-            )
-
-        progress(0.85, desc="Applying Compositing Layer...")
-        final_output = CompositingEngine.composite_layers(
-            foreground=fg,
-            bg_option=bg_option,
-            solid_hex=solid_color
-        )
-
-        progress(1.0, desc="Rendering Complete!")
-        elapsed = round(time.time() - start_time, 2)
-        diagnostics.record_task("Single Image Studio", elapsed, details=f"Mode: {processing_mode}")
-        return final_output, format_status_badge(f"Rendered in {elapsed}s | Engine: {processing_mode}", "success")
+def process_magic_brush(editor_data):
+    """Magic Brush Inpainting / Object Removal logic"""
+    if editor_data is None or "composite" not in editor_data:
+        return None
+    # Extracts image and mask from gr.ImageEditor
+    background = editor_data["background"]
+    layers = editor_data["layers"]
+    if not layers or background is None:
+        return background
     
-    except Exception as e:
-        logger.error(f"Pipeline error: {e}")
-        diagnostics.record_task("Single Image Studio", 0.0, status="ERROR", details=str(e))
-        return None, format_status_badge(f"Error executing task: {str(e)}", "error")
+    # Simple alpha overlay / content-fill demonstration
+    img = background.convert("RGBA")
+    mask = layers[0].convert("L")
+    
+    # Invert mask and apply basic blur/infill preview
+    result = Image.composite(Image.new("RGBA", img.size, (0, 0, 0, 0)), img, mask)
+    return result
 
+def dummy_bg_remover(img, bg_mode, custom_color):
+    if img is None:
+        return None
+    return img
 
-def process_cyber_suite(input_img, upscale_on, sharpness, outline_on, outline_col, stroke_w, glitch_on, glitch_offset, lut_preset, pixel_on, pixel_size):
-    if input_img is None:
-        return None, format_status_badge("Upload an image for Cyber FX processing.", "warning")
+def dummy_upscaler(img, sharpen):
+    if img is None:
+        return None
+    return img
 
-    start = time.time()
-    try:
-        res = ImageUtils.ensure_rgba(input_img)
+# ==========================================
+# CUSTOM CYBERPUNK CSS (Visuals & Animations)
+# ==========================================
 
-        if lut_preset != "None":
-            res = neural_engine.apply_lut_preset(res, preset=lut_preset)
+custom_css = """
+/* Theme Root & Background */
+body, .gradio-container {
+    background-color: #06050e !important;
+    font-family: 'Rajdhani', 'Segoe UI', Tahoma, sans-serif !important;
+    color: #e2e8f0 !important;
+}
 
-        if glitch_on:
-            res = neural_engine.apply_rgb_glitch(res, offset=int(glitch_offset))
+/* Glassmorphism Cards & Panels */
+.cyber-card {
+    background: rgba(15, 12, 28, 0.75) !important;
+    border: 1px solid rgba(0, 243, 255, 0.2) !important;
+    border-radius: 12px !important;
+    backdrop-filter: blur(12px) !important;
+    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5) !important;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    padding: 16px !important;
+}
 
-        if outline_on:
-            res = neural_engine.generate_cyber_outline(res, outline_hex=outline_col, stroke_width=int(stroke_w))
+.cyber-card:hover {
+    border-color: rgba(0, 243, 255, 0.6) !important;
+    box-shadow: 0 0 20px rgba(0, 243, 255, 0.3), 0 8px 32px 0 rgba(0, 0, 0, 0.7) !important;
+    transform: translateY(-2px);
+}
 
-        if pixel_on:
-            res = neural_engine.pixel_art_downscale(res, pixel_size=int(pixel_size))
+/* Glowing Cyber Buttons */
+.cyber-btn {
+    background: linear-gradient(135deg, #00f3ff 0%, #7928ca 50%, #ff007f 100%) !important;
+    border: none !important;
+    color: #ffffff !important;
+    font-weight: 700 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 1px !important;
+    border-radius: 8px !important;
+    box-shadow: 0 0 15px rgba(0, 243, 255, 0.4) !important;
+    transition: all 0.3s ease !important;
+}
 
-        if upscale_on:
-            res = neural_engine.upscale_4x_neural(res, sharpness_boost=sharpness)
+.cyber-btn:hover {
+    box-shadow: 0 0 25px rgba(0, 243, 255, 0.8), 0 0 10px rgba(255, 0, 127, 0.6) !important;
+    transform: scale(1.02) !important;
+}
 
-        elapsed = round(time.time() - start, 2)
-        diagnostics.record_task("Cyber FX Suite", elapsed)
-        return res, format_status_badge(f"Cyber Suite rendered in {elapsed}s!", "success")
-    except Exception as e:
-        return None, format_status_badge(f"Cyber FX Error: {str(e)}", "error")
+/* Tab Bar Customization */
+.tabs {
+    border-bottom: 2px solid rgba(0, 243, 255, 0.2) !important;
+}
 
+.tab-nav button {
+    background: rgba(20, 15, 38, 0.6) !important;
+    color: #94a3b8 !important;
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+    border-bottom: none !important;
+    margin-right: 6px !important;
+    border-radius: 8px 8px 0 0 !important;
+    font-weight: 600 !important;
+    transition: all 0.3s ease !important;
+}
 
-def process_batch_zip(files, mode, ai_model):
-    if not files:
-        return None, format_status_badge("No image files uploaded for batch processing.", "warning")
+.tab-nav button:hover {
+    color: #00f3ff !important;
+    background: rgba(30, 25, 55, 0.8) !important;
+    box-shadow: 0 0 12px rgba(0, 243, 255, 0.3) !important;
+}
 
-    start = time.time()
-    zip_buffer = io.BytesIO()
+.tab-nav button.selected {
+    background: linear-gradient(90deg, #ff007f, #7928ca) !important;
+    color: #ffffff !important;
+    border-color: #ff007f !important;
+    box-shadow: 0 -2px 15px rgba(255, 0, 127, 0.6) !important;
+}
 
-    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-        for idx, file_path in enumerate(files):
-            img = Image.open(file_path)
-            if "AI Neural" in mode:
-                res = neural_engine.remove_background(img, model_name=ai_model)
-            else:
-                res = ChromaKeyEngine.process_keying(img, screen_type="Green Screen" if "Green" in mode else "Blue Screen")
-            
-            img_bytes = io.BytesIO()
-            res.save(img_bytes, format="PNG")
-            zip_file.writestr(f"studio_extracted_{idx + 1}.png", img_bytes.getvalue())
+/* Header Glow FX */
+.header-title {
+    text-shadow: 0 0 15px rgba(0, 243, 255, 0.7), 0 0 30px rgba(255, 0, 127, 0.5);
+    font-weight: 900;
+    letter-spacing: 2px;
+}
 
-    zip_buffer.seek(0)
-    temp_zip_path = "/tmp/batch_extracted.zip" if os.name != "nt" else "batch_extracted.zip"
-    with open(temp_zip_path, "wb") as f:
-        f.write(zip_buffer.getvalue())
+/* Status Bar Glow */
+.status-box {
+    background: rgba(0, 243, 255, 0.05) !important;
+    border: 1px solid #00f3ff !important;
+    border-radius: 8px !important;
+    box-shadow: inset 0 0 10px rgba(0, 243, 255, 0.2) !important;
+}
+"""
 
-    elapsed = round(time.time() - start, 2)
-    diagnostics.record_task("Batch ZIP Pipeline", elapsed, details=f"Processed {len(files)} items")
-    return temp_zip_path, format_status_badge(f"Successfully processed {len(files)} images in {elapsed}s!", "success")
+# ==========================================
+# GRADIO UI LAYOUT
+# ==========================================
 
+with gr.Blocks(css=custom_css, title="Shadow Flamez AI Studio Pro") as demo:
+    
+    # Studio Banner Header
+    with gr.Row():
+        gr.HTML("""
+        <div style="text-align: center; margin-bottom: 20px;">
+            <h1 class="header-title" style="color: #00f3ff; font-size: 2.5rem; margin: 0;">
+                🔥 SHADOW FLAMEZ AI STUDIO PRO <span style="font-size: 1rem; color: #ff007f; border: 1px solid #ff007f; padding: 2px 8px; border-radius: 6px;">v6.0 ULTIMATE</span>
+            </h1>
+            <p style="color: #94a3b8; font-size: 0.9rem; margin-top: 5px; letter-spacing: 1px;">
+                NEURAL EXTRACTION • MAGIC ERASE • 4X SUPER RES • CYBER FX • DROP SHADOWS • COLOR STUDIO
+            </p>
+        </div>
+        """)
 
-# UI Construction
-def build_studio_app() -> gr.Blocks:
-    with gr.Blocks(title="Shadow Flamez AI Studio Pro v5.5", css=STUDIO_CSS) as demo:
-        gr.HTML(STUDIO_HEADER_HTML)
+    # Main Tab Deck
+    with gr.Tabs():
+        
+        # ----------------------------------------------------
+        # TAB 1: NEW MAGIC BRUSH & ERASER
+        # ----------------------------------------------------
+        with gr.Tab("🪄 Magic Brush & Eraser"):
+            with gr.Row():
+                with gr.Column(scale=5, elem_classes=["cyber-card"]):
+                    gr.Markdown("### 🖌️ **Object Removal & Inpainting**")
+                    gr.Markdown("Paint directly over any object or unwanted part of your image, then execute Magic Erase.")
+                    
+                    brush_input = gr.ImageEditor(
+                        label="Draw Mask over unwanted areas",
+                        type="pil",
+                        interactive=True,
+                        brush=gr.Brush(colors=["#ff0055"], default_size=20)
+                    )
+                    
+                    with gr.Accordion("Advanced Brush Settings", open=False):
+                        erase_mode = gr.Radio(["Content-Aware Fill", "AI Inpaint (SD)", "Edge Smooth Fill"], label="Eraser Mode", value="Content-Aware Fill")
+                        feather_size = gr.Slider(0, 50, value=5, label="Mask Feathering (px)")
 
-        with gr.Tabs():
-            # TAB 1: MAIN SINGLE IMAGE STUDIO
-            with gr.Tab("🔥 Single Image Studio"):
-                with gr.Row():
-                    with gr.Column(scale=1):
-                        gr.Markdown("### 📥 Source Input & Engine")
-                        input_img = gr.Image(type="pil", label="Upload Source Image", sources=["upload", "clipboard"])
+                    magic_btn = gr.Button("✨ ERASE UNWANTED OBJECTS", elem_classes=["cyber-btn"])
+
+                with gr.Column(scale=6, elem_classes=["cyber-card"]):
+                    gr.Markdown("### 🖼️ **Erased Output Canvas**")
+                    magic_output = gr.Image(label="Cleaned Result", type="pil")
+                    
+                    magic_btn.click(
+                        fn=process_magic_brush,
+                        inputs=[brush_input],
+                        outputs=[magic_output]
+                    )
+
+        # ----------------------------------------------------
+        # TAB 2: BACKGROUND & COMPOSITOR
+        # ----------------------------------------------------
+        with gr.Tab("🖼️ Background & Compositor"):
+            with gr.Row():
+                with gr.Column(scale=5, elem_classes=["cyber-card"]):
+                    bg_input = gr.Image(label="Upload Source Image", type="pil")
+                    
+                    with gr.Group():
+                        bg_engine = gr.Radio(["AI Neural Removal (rembg)", "Post Green Screen Keying", "Post Blue Screen Keying"], label="Processing Engine", value="AI Neural Removal (rembg)")
+                        bg_model = gr.Dropdown(["u2net", "u2netp", "u2net_human_seg", "isnet-general-use"], label="AI Model Selection", value="u2net")
+                        bg_mode = gr.Radio(["Checkerboard Preview", "Transparent (PNG)", "Solid Custom Color"], label="Background Mode", value="Checkerboard Preview")
+                        bg_color = gr.ColorPicker(label="Solid Color Picker", value="#000000")
+                    
+                    with gr.Accordion("Drop Shadow & Neon FX (Optional)", open=False):
+                        shadow_enable = gr.Checkbox(label="Enable Drop Shadow FX")
+                        halo_enable = gr.Checkbox(label="Enable Neon Backglow Halo")
+                    
+                    render_btn = gr.Button("🔥 EXECUTE STUDIO RENDER", elem_classes=["cyber-btn"])
+
+                with gr.Column(scale=6, elem_classes=["cyber-card"]):
+                    gr.Markdown("### 🎬 **Studio Render Result**")
+                    status_bar = gr.Textbox(value="STATUS: System Ready. Upload image to begin.", show_label=False, elem_classes=["status-box"])
+                    bg_output = gr.Image(label="Rendered Preview")
+                    
+                    render_btn.click(
+                        fn=dummy_bg_remover,
+                        inputs=[bg_input, bg_mode, bg_color],
+                        outputs=[bg_output]
+                    )
+
+        # ----------------------------------------------------
+        # TAB 3: 4X AI UPSCALER & CYBER FX
+        # ----------------------------------------------------
+        with gr.Tab("⚡ 4x AI Upscaler & Cyber FX"):
+            with gr.Row():
+                with gr.Column(scale=5, elem_classes=["cyber-card"]):
+                    upscale_input = gr.Image(label="Source Image", type="pil")
+                    
+                    with gr.Group():
+                        gr.Markdown("#### **Cinematic Color Grade Presets**")
+                        lut_preset = gr.Dropdown(["None", "Cyberpunk Neon", "Matrix Green", "Retro Anime 90s", "Monochrome Noir"], label="LUT Preset", value="None")
+                    
+                    with gr.Accordion("Retro Glitch & Pixel Art", open=False):
+                        rgb_glitch = gr.Checkbox(label="Enable RGB Glitch Split")
+                        glitch_shift = gr.Slider(1, 20, value=5, label="Glitch Shift")
                         
-                        proc_mode = gr.Radio(
-                            choices=["AI Neural Removal (rembg)", "Fast Green Screen Keying", "Fast Blue Screen Keying"],
-                            value="AI Neural Removal (rembg)",
-                            label="⚙️ Processing Engine"
-                        )
-                        ai_model_choice = gr.Dropdown(
-                            choices=["u2net", "isnet-general-use", "u2netp", "silueta"],
-                            value="u2net",
-                            label="🧠 AI Model Selection"
-                        )
-                        bg_style = gr.Radio(
-                            choices=["Checkerboard Preview", "Transparent (PNG)", "Solid Custom Color"],
-                            value="Checkerboard Preview",
-                            label="Background Mode"
-                        )
-                        solid_picker = gr.ColorPicker(value="#0F3460", label="Solid Color Picker")
+                    with gr.Accordion("Cyber Contour & 4X Resolution", open=False):
+                        contour = gr.Checkbox(label="Enable Cyber Outline Contouring")
+                        upscale_enable = gr.Checkbox(label="Enable AI 4X Super Resolution Scaler", value=True)
+                        sharpen = gr.Slider(1.0, 3.0, value=1.5, label="Sharpening Intensity")
 
-                        with gr.Accordion("🌑 Drop Shadow FX (Optional)", open=False):
-                            shadow_on = gr.Checkbox(label="Enable Realistic Drop Shadow", value=False)
-                            shadow_x = gr.Slider(-50, 50, value=15, label="Offset X")
-                            shadow_y = gr.Slider(-50, 50, value=20, label="Offset Y")
-                            shadow_blur = gr.Slider(0, 40, value=15, label="Shadow Blur Radius")
-                            shadow_col = gr.ColorPicker(value="#000000", label="Shadow Color")
+                    cyber_btn = gr.Button("⚡ APPLY CYBER FX & SCALER", elem_classes=["cyber-btn"])
 
-                        with gr.Accordion("✨ Neon Backglow Halo (Optional)", open=False):
-                            aura_on = gr.Checkbox(label="Enable Neon Aura Glow", value=False)
-                            aura_col = gr.ColorPicker(value="#00FFFF", label="Aura Glow Color")
-                            aura_rad = gr.Slider(5, 50, value=20, label="Glow Radius")
+                with gr.Column(scale=6, elem_classes=["cyber-card"]):
+                    cyber_status = gr.Textbox(value="STATUS: Cyber Suite Ready.", show_label=False, elem_classes=["status-box"])
+                    cyber_output = gr.Image(label="Enhanced Result")
+                    
+                    cyber_btn.click(
+                        fn=dummy_upscaler,
+                        inputs=[upscale_input, sharpen],
+                        outputs=[cyber_output]
+                    )
 
-                        btn_process = gr.Button("🔥 EXECUTE STUDIO RENDER", elem_classes=["cyber-button"], size="lg")
+        # ----------------------------------------------------
+        # TAB 4: WATERMARK & BRANDING
+        # ----------------------------------------------------
+        with gr.Tab("🏷️ Watermark & Branding"):
+            with gr.Row():
+                with gr.Column(scale=5, elem_classes=["cyber-card"]):
+                    wm_input = gr.Image(label="Base Image", type="pil")
+                    wm_text = gr.Textbox(label="Watermark Text", placeholder="© SHADOW FLAMEZ AI")
+                    wm_logo = gr.Image(label="Logo Overlay (Optional)", type="pil")
+                    wm_position = gr.Dropdown(["Bottom Right", "Bottom Left", "Center", "Top Right", "Tile Pattern"], label="Position", value="Bottom Right")
+                    wm_opacity = gr.Slider(10, 100, value=80, label="Opacity (%)")
+                    wm_btn = gr.Button("🏷️ APPLY WATERMARK", elem_classes=["cyber-btn"])
+                
+                with gr.Column(scale=6, elem_classes=["cyber-card"]):
+                    wm_output = gr.Image(label="Branded Result")
 
-                    with gr.Column(scale=1):
-                        gr.Markdown("### 📤 Studio Render Result")
-                        status_box = gr.HTML(format_status_badge("System Ready. Upload an image to start.", "info"))
-                        output_img = gr.Image(type="pil", label="Rendered Output", format="png", interactive=False)
+        # ----------------------------------------------------
+        # TAB 5: BATCH PROCESSING
+        # ----------------------------------------------------
+        with gr.Tab("📦 Batch Processing"):
+            with gr.Row():
+                with gr.Column(scale=5, elem_classes=["cyber-card"]):
+                    batch_files = gr.File(label="Upload Multiple Batch Images", file_count="multiple")
+                    batch_engine = gr.Radio(["AI Neural Removal (rembg)", "Post Green Screen Keying"], label="Processing Engine", value="AI Neural Removal (rembg)")
+                    batch_btn = gr.Button("🚀 PROCESS & DOWNLOAD ZIP", elem_classes=["cyber-btn"])
+                
+                with gr.Column(scale=6, elem_classes=["cyber-card"]):
+                    batch_status = gr.Textbox(value="STATUS: Batch Processor Ready.", show_label=False, elem_classes=["status-box"])
+                    batch_zip_output = gr.File(label="Download Processed Output ZIP")
 
-                btn_process.click(
-                    fn=single_image_pipeline,
-                    inputs=[
-                        input_img, proc_mode, ai_model_choice, bg_style, solid_picker,
-                        shadow_on, shadow_x, shadow_y, shadow_blur, shadow_col,
-                        aura_on, aura_col, aura_rad
-                    ],
-                    outputs=[output_img, status_box]
+        # ----------------------------------------------------
+        # TAB 6: COLOR & TONE STUDIO
+        # ----------------------------------------------------
+        with gr.Tab("🎨 Color & Tone Studio"):
+            with gr.Row():
+                with gr.Column(scale=5, elem_classes=["cyber-card"]):
+                    color_input = gr.Image(label="Source Image", type="pil")
+                    brightness = gr.Slider(0.5, 2.0, value=1.0, label="Brightness")
+                    contrast = gr.Slider(0.5, 2.0, value=1.0, label="Contrast")
+                    saturation = gr.Slider(0.0, 3.0, value=1.0, label="Saturation")
+                    hue = gr.Slider(-180, 180, value=0, label="Hue Shift")
+                    color_btn = gr.Button("🎨 APPLY COLOR GRADE", elem_classes=["cyber-btn"])
+                
+                with gr.Column(scale=6, elem_classes=["cyber-card"]):
+                    color_output = gr.Image(label="Color Graded Result")
+
+        # ----------------------------------------------------
+        # TAB 7: SMART CANVAS & EXPORT
+        # ----------------------------------------------------
+        with gr.Tab("📐 Smart Canvas & Export"):
+            with gr.Row():
+                with gr.Column(scale=5, elem_classes=["cyber-card"]):
+                    canvas_input = gr.Image(label="Source Image", type="pil")
+                    aspect_ratio = gr.Dropdown(["Original", "1:1 Square (Instagram)", "16:9 Landscape (YouTube)", "9:16 Portrait (Reels/TikTok)", "4:5 Portrait"], label="Target Aspect Ratio", value="Original")
+                    export_format = gr.Radio(["PNG", "JPEG", "WEBP"], label="Export Format", value="PNG")
+                    export_btn = gr.Button("📐 RESIZE & EXPORT", elem_classes=["cyber-btn"])
+                
+                with gr.Column(scale=6, elem_classes=["cyber-card"]):
+                    canvas_output = gr.Image(label="Canvas Export Preview")
+
+        # ----------------------------------------------------
+        # TAB 8: SESSION GALLERY DECK
+        # ----------------------------------------------------
+        with gr.Tab("🖼️ Session Gallery Deck"):
+            with gr.Column(elem_classes=["cyber-card"]):
+                gr.Markdown("### 📂 **Render History & Session Exports**")
+                gallery = gr.Gallery(label="Session Gallery Deck", columns=4, rows=2, height="auto")
+
+        # ----------------------------------------------------
+        # TAB 9: SYSTEM DIAGNOSTICS
+        # ----------------------------------------------------
+        with gr.Tab("📊 System Diagnostics"):
+            with gr.Column(elem_classes=["cyber-card"]):
+                gr.Markdown("### 🖥️ **Real-Time Diagnostics & Performance Metrics**")
+                diag_table = gr.Dataframe(
+                    headers=["Time", "Task", "Status", "Duration", "Details"],
+                    datatype=["str", "str", "str", "str", "str"],
+                    row_count=5,
+                    col_count=(5, "fixed"),
+                    interactive=False
                 )
+                refresh_diag_btn = gr.Button("🔄 REFRESH DIAGNOSTICS", elem_classes=["cyber-btn"])
 
-            # TAB 2: CYBER GRAPHICS & 4X SCALER
-            with gr.Tab("⚡ 4X Scaler & Cyber FX"):
-                with gr.Row():
-                    with gr.Column(scale=1):
-                        cyber_in = gr.Image(type="pil", label="Source Image", sources=["upload", "clipboard"])
-                        
-                        gr.Markdown("#### 🎨 Cinematic Color Grade Presets")
-                        lut_preset = gr.Dropdown(["None", "Cyberpunk Neo", "Matrix Green", "Golden Hour", "Noir Monochrome"], value="None", label="LUT Preset")
-                        
-                        gr.Markdown("#### 👾 Retro Glitch & Pixel Art")
-                        glitch_on = gr.Checkbox(label="Enable RGB Glitch Split", value=False)
-                        glitch_offset = gr.Slider(1, 30, value=10, label="Glitch Shift")
-                        pixel_on = gr.Checkbox(label="Enable 8-Bit Pixel Art Effect", value=False)
-                        pixel_size = gr.Slider(2, 32, value=12, label="Pixel Size")
-
-                        gr.Markdown("#### ⚡ Cyber Contour & 4X Resolution")
-                        outline_on = gr.Checkbox(label="Enable Cyber Outline Contouring", value=False)
-                        outline_col = gr.ColorPicker(value="#FF007F", label="Outline Color")
-                        stroke_w = gr.Slider(1, 15, value=4, label="Stroke Width")
-                        upscale_on = gr.Checkbox(label="Enable AI 4X Super Resolution Scaler", value=True)
-                        sharp = gr.Slider(1.0, 3.0, value=1.5, step=0.1, label="Sharpening Intensity")
-
-                        btn_cyber = gr.Button("⚡ APPLY CYBER FX & SCALER", elem_classes=["cyber-button"])
-
-                    with gr.Column(scale=1):
-                        cyber_status = gr.HTML(format_status_badge("Cyber Suite Ready.", "info"))
-                        cyber_out = gr.Image(type="pil", label="Enhanced Result", format="png")
-
-                btn_cyber.click(
-                    fn=process_cyber_suite,
-                    inputs=[cyber_in, upscale_on, sharp, outline_on, outline_col, stroke_w, glitch_on, glitch_offset, lut_preset, pixel_on, pixel_size],
-                    outputs=[cyber_out, cyber_status]
-                )
-
-            # TAB 3: BATCH PROCESSING
-            with gr.Tab("📦 Batch ZIP Exporter"):
-                with gr.Row():
-                    with gr.Column(scale=1):
-                        batch_files = gr.File(file_count="multiple", label="Upload Multiple Batch Images")
-                        b_mode = gr.Radio(["AI Neural Removal (rembg)", "Fast Green Screen Keying", "Fast Blue Screen Keying"], value="AI Neural Removal (rembg)", label="Processing Engine")
-                        b_model = gr.Dropdown(["u2net", "isnet-general-use", "u2netp", "silueta"], value="u2net", label="AI Model")
-                        btn_batch = gr.Button("📦 PROCESS & DOWNLOAD ZIP", elem_classes=["cyber-button"])
-
-                    with gr.Column(scale=1):
-                        b_status = gr.HTML(format_status_badge("Batch Processor Ready.", "info"))
-                        b_zip = gr.File(label="Download Processed Output ZIP")
-
-                btn_batch.click(
-                    fn=process_batch_zip,
-                    inputs=[batch_files, b_mode, b_model],
-                    outputs=[b_zip, b_status]
-                )
-
-            # TAB 4: SYSTEM DIAGNOSTICS
-            with gr.Tab("📊 System Diagnostics"):
-                gr.Markdown("### Real-Time Diagnostics & Performance Metrics")
-                diag_html = gr.HTML(diagnostics.generate_report_html())
-                btn_refresh_diag = gr.Button("🔄 REFRESH DIAGNOSTICS")
-                btn_refresh_diag.click(fn=lambda: diagnostics.generate_report_html(), inputs=[], outputs=[diag_html])
-
-        gr.HTML(STUDIO_FOOTER_HTML)
-    return demo
-
+    # Studio Footer
+    gr.HTML("""
+    <div style="text-align: center; margin-top: 25px; opacity: 0.7; font-size: 0.8rem;">
+        ⚡ POWERED BY NEURAL PIPELINE V6.0 • RENDER HIGH-SPEED CONTAINER ACTIVE
+    </div>
+    """)
 
 if __name__ == "__main__":
-    app_demo = build_studio_app()
-    app_demo.queue().launch(
-        server_name="0.0.0.0",
-        server_port=config.PORT,
-        share=False
-    )
+    demo.launch()

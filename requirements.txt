@@ -1,8 +1,7 @@
---extra-index-url https://download.pytorch.org/whl/cpu
-torch
-torchvision
-rembg
+numpy
 gradio>=4.0.0
+rembg>=2.0.50
+onnxruntime>=1.16.0
+pillow>=10.0.0
 opencv-python-headless
-pillow
 numpy

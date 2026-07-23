@@ -2,31 +2,40 @@ import os
 import io
 import gc
 import zipfile
+
+# ======================================================
+# 1. FORCE CPU-ONLY MODE (Disables ONNX GPU discovery delay)
+# ======================================================
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+os.environ["ORT_DISABLE_TELEMETRY"] = "1"
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+
 import numpy as np
 import cv2
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 import gradio as gr
-import onnxruntime as ort
-from rembg import remove, new_session
 
-# ======================================================
-# 1. GLOBAL CONFIGURATION & ONNX CPU THREAD OPTIMIZATION
-# ======================================================
-
-# Restrict ONNX to 1 thread to avoid CPU thrashing on Render's 0.1 vCPU core
-ort_options = ort.SessionOptions()
-ort_options.intra_op_num_threads = 1
-ort_options.inter_op_num_threads = 1
-
-# Lazy session cache to prevent memory duplication
+# Global cache for AI model sessions
 REMBG_SESSIONS = {}
 
 def get_rembg_session(model_name: str = "u2netp"):
     """
-    Retrieves or initializes a rembg session with CPU thread caps.
-    Defaulting to u2netp keeps memory consumption under 200MB.
+    Retrieves or initializes a rembg session on demand.
+    Defers ONNX initialization until a user actually clicks 'Remove Background'.
     """
     if model_name not in REMBG_SESSIONS:
+        import onnxruntime as ort
+        from rembg import new_session
+
+        # Mute ONNX warnings/logs
+        ort.set_default_logger_severity(3)
+
+        # Restrict CPU threads for Render's free tier
+        ort_options = ort.SessionOptions()
+        ort_options.intra_op_num_threads = 1
+        ort_options.inter_op_num_threads = 1
+
         REMBG_SESSIONS[model_name] = new_session(
             model_name, 
             providers=["CPUExecutionProvider"], 
@@ -48,16 +57,14 @@ def smart_bg_removal(
     af_erode_size: int = 10,
     max_proc_dim: int = 1024
 ):
-    """
-    Processes background removal on a downscaled tensor and upscales
-    the alpha mask back to full original resolution without quality loss.
-    """
     if img is None:
         return None, None
 
+    from rembg import remove
+
     orig_w, orig_h = img.size
 
-    # Step A: Scale down for neural network processing if image is huge
+    # Scale down for neural network processing if image is large
     if max(orig_w, orig_h) > max_proc_dim:
         scale = max_proc_dim / float(max(orig_w, orig_h))
         work_w, work_h = int(orig_w * scale), int(orig_h * scale)
@@ -65,7 +72,7 @@ def smart_bg_removal(
     else:
         work_img = img.copy()
 
-    # Step B: Get session & extract alpha mask
+    # Get session & extract alpha mask
     session = get_rembg_session(model_name)
     mask_png = remove(
         work_img,
@@ -77,19 +84,17 @@ def smart_bg_removal(
         alpha_matting_erode_size=af_erode_size
     )
 
-    # Step C: Upscale mask back to original resolution
+    # Upscale mask back to original resolution
     full_mask = mask_png.resize((orig_w, orig_h), Image.Resampling.BICUBIC)
 
-    # Step D: Apply mask to full-resolution input image
+    # Apply mask to full-resolution input image
     result = img.convert("RGBA")
     result.putalpha(full_mask)
 
-    # Step E: Memory cleanup
     del work_img, mask_png
     gc.collect()
 
     return result, full_mask
-
 
 # ======================================================
 # 3. TAB 1: BACKGROUND REMOVER & ALPHA MATTING STUDIO

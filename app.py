@@ -1,338 +1,301 @@
-import gradio as gr
-import numpy as np
-from PIL import Image, ImageEnhance, ImageOps
-
-# ==========================================
-# BACKEND MOCK/CORE FUNCTIONS
-# ==========================================
-
-def process_magic_brush(editor_data):
-    """Magic Brush Inpainting / Object Removal logic"""
-    if editor_data is None or "composite" not in editor_data:
-        return None
-    # Extracts image and mask from gr.ImageEditor
-    background = editor_data["background"]
-    layers = editor_data["layers"]
-    if not layers or background is None:
-        return background
-    
-    # Simple alpha overlay / content-fill demonstration
-    img = background.convert("RGBA")
-    mask = layers[0].convert("L")
-    
-    # Invert mask and apply basic blur/infill preview
-    result = Image.composite(Image.new("RGBA", img.size, (0, 0, 0, 0)), img, mask)
-    return result
-
-def dummy_bg_remover(img, bg_mode, custom_color):
-    if img is None:
-        return None
-    return img
-
-def dummy_upscaler(img, sharpen):
-    if img is None:
-        return None
-    return img
-
-# ==========================================
-# CUSTOM CYBERPUNK CSS (Visuals & Animations)
-# ==========================================
-
-custom_css = """
-/* Theme Root & Background */
-body, .gradio-container {
-    background-color: #06050e !important;
-    font-family: 'Rajdhani', 'Segoe UI', Tahoma, sans-serif !important;
-    color: #e2e8f0 !important;
-}
-
-/* Glassmorphism Cards & Panels */
-.cyber-card {
-    background: rgba(15, 12, 28, 0.75) !important;
-    border: 1px solid rgba(0, 243, 255, 0.2) !important;
-    border-radius: 12px !important;
-    backdrop-filter: blur(12px) !important;
-    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5) !important;
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
-    padding: 16px !important;
-}
-
-.cyber-card:hover {
-    border-color: rgba(0, 243, 255, 0.6) !important;
-    box-shadow: 0 0 20px rgba(0, 243, 255, 0.3), 0 8px 32px 0 rgba(0, 0, 0, 0.7) !important;
-    transform: translateY(-2px);
-}
-
-/* Glowing Cyber Buttons */
-.cyber-btn {
-    background: linear-gradient(135deg, #00f3ff 0%, #7928ca 50%, #ff007f 100%) !important;
-    border: none !important;
-    color: #ffffff !important;
-    font-weight: 700 !important;
-    text-transform: uppercase !important;
-    letter-spacing: 1px !important;
-    border-radius: 8px !important;
-    box-shadow: 0 0 15px rgba(0, 243, 255, 0.4) !important;
-    transition: all 0.3s ease !important;
-}
-
-.cyber-btn:hover {
-    box-shadow: 0 0 25px rgba(0, 243, 255, 0.8), 0 0 10px rgba(255, 0, 127, 0.6) !important;
-    transform: scale(1.02) !important;
-}
-
-/* Tab Bar Customization */
-.tabs {
-    border-bottom: 2px solid rgba(0, 243, 255, 0.2) !important;
-}
-
-.tab-nav button {
-    background: rgba(20, 15, 38, 0.6) !important;
-    color: #94a3b8 !important;
-    border: 1px solid rgba(255, 255, 255, 0.08) !important;
-    border-bottom: none !important;
-    margin-right: 6px !important;
-    border-radius: 8px 8px 0 0 !important;
-    font-weight: 600 !important;
-    transition: all 0.3s ease !important;
-}
-
-.tab-nav button:hover {
-    color: #00f3ff !important;
-    background: rgba(30, 25, 55, 0.8) !important;
-    box-shadow: 0 0 12px rgba(0, 243, 255, 0.3) !important;
-}
-
-.tab-nav button.selected {
-    background: linear-gradient(90deg, #ff007f, #7928ca) !important;
-    color: #ffffff !important;
-    border-color: #ff007f !important;
-    box-shadow: 0 -2px 15px rgba(255, 0, 127, 0.6) !important;
-}
-
-/* Header Glow FX */
-.header-title {
-    text-shadow: 0 0 15px rgba(0, 243, 255, 0.7), 0 0 30px rgba(255, 0, 127, 0.5);
-    font-weight: 900;
-    letter-spacing: 2px;
-}
-
-/* Status Bar Glow */
-.status-box {
-    background: rgba(0, 243, 255, 0.05) !important;
-    border: 1px solid #00f3ff !important;
-    border-radius: 8px !important;
-    box-shadow: inset 0 0 10px rgba(0, 243, 255, 0.2) !important;
-}
 """
+app.py - Main Application Entry Point (Shadow Flamez AI Studio Pro v6.0)
+"""
+import io
+import os
+import time
+import zipfile
+import requests
+import numpy as np
+import cv2
+from PIL import Image, ImageEnhance, ImageOps, ImageFilter
+import gradio as gr
+
+from styles import STUDIO_CSS, STUDIO_HEADER_HTML, STUDIO_FOOTER_HTML
+
+# Pre-load local fallback session
+try:
+    import rembg
+    LOCAL_REMBG_SESSION = rembg.new_session("u2net")
+except Exception:
+    LOCAL_REMBG_SESSION = None
+
+
+def format_status(msg: str, status_type: str = "info") -> str:
+    colors = {"info": "#00f3ff", "success": "#00ff66", "warning": "#ffaa00", "error": "#ff0055"}
+    col = colors.get(status_type, "#00f3ff")
+    return f'<div class="status-badge" style="border-color: {col}; color: {col};">STATUS: {msg}</div>'
+
 
 # ==========================================
-# GRADIO UI LAYOUT
+# HYBRID ENGINE EXECUTION PIPELINE
 # ==========================================
 
-with gr.Blocks(css=custom_css, title="Shadow Flamez AI Studio Pro") as demo:
+def execute_bg_removal(input_img: Image.Image, colab_url: str, model_name: str, progress=gr.Progress()) -> Image.Image:
+    """Executes BG Removal on Colab GPU if connected, else falls back to Local CPU"""
+    if input_img is None:
+        return None
+
+    progress(0.2, desc="Preparing Image Matrix...")
     
-    # Studio Banner Header
-    with gr.Row():
-        gr.HTML("""
-        <div style="text-align: center; margin-bottom: 20px;">
-            <h1 class="header-title" style="color: #00f3ff; font-size: 2.5rem; margin: 0;">
-                🔥 SHADOW FLAMEZ AI STUDIO PRO <span style="font-size: 1rem; color: #ff007f; border: 1px solid #ff007f; padding: 2px 8px; border-radius: 6px;">v6.0 ULTIMATE</span>
-            </h1>
-            <p style="color: #94a3b8; font-size: 0.9rem; margin-top: 5px; letter-spacing: 1px;">
-                NEURAL EXTRACTION • MAGIC ERASE • 4X SUPER RES • CYBER FX • DROP SHADOWS • COLOR STUDIO
-            </p>
-        </div>
-        """)
+    # Try Colab GPU Endpoint First
+    if colab_url and colab_url.strip():
+        try:
+            progress(0.5, desc="⚡ Offloading to Colab GPU Engine...")
+            buf = io.BytesIO()
+            input_img.save(buf, format="PNG")
+            buf.seek(0)
+            
+            endpoint = f"{colab_url.strip('/')}/remove-bg"
+            res = requests.post(endpoint, files={"file": ("image.png", buf, "image/png")}, data={"model_name": model_name}, timeout=25)
+            if res.status_code == 200:
+                progress(0.9, desc="Receiving Rendered GPU Frame...")
+                return Image.open(io.BytesIO(res.content))
+        except Exception as e:
+            print(f"Colab GPU Bypass Warning: {e}")
 
-    # Main Tab Deck
-    with gr.Tabs():
-        
-        # ----------------------------------------------------
-        # TAB 1: NEW MAGIC BRUSH & ERASER
-        # ----------------------------------------------------
-        with gr.Tab("🪄 Magic Brush & Eraser"):
-            with gr.Row():
-                with gr.Column(scale=5, elem_classes=["cyber-card"]):
-                    gr.Markdown("### 🖌️ **Object Removal & Inpainting**")
-                    gr.Markdown("Paint directly over any object or unwanted part of your image, then execute Magic Erase.")
-                    
-                    brush_input = gr.ImageEditor(
-                        label="Draw Mask over unwanted areas",
-                        type="pil",
-                        interactive=True,
-                        brush=gr.Brush(colors=["#ff0055"], default_size=20)
-                    )
-                    
-                    with gr.Accordion("Advanced Brush Settings", open=False):
-                        erase_mode = gr.Radio(["Content-Aware Fill", "AI Inpaint (SD)", "Edge Smooth Fill"], label="Eraser Mode", value="Content-Aware Fill")
-                        feather_size = gr.Slider(0, 50, value=5, label="Mask Feathering (px)")
+    # Fallback to Local CPU
+    progress(0.6, desc="Running on Local Render CPU...")
+    if LOCAL_REMBG_SESSION:
+        return rembg.remove(input_img, session=LOCAL_REMBG_SESSION)
+    return rembg.remove(input_img)
 
-                    magic_btn = gr.Button("✨ ERASE UNWANTED OBJECTS", elem_classes=["cyber-btn"])
 
-                with gr.Column(scale=6, elem_classes=["cyber-card"]):
-                    gr.Markdown("### 🖼️ **Erased Output Canvas**")
-                    magic_output = gr.Image(label="Cleaned Result", type="pil")
-                    
-                    magic_btn.click(
-                        fn=process_magic_brush,
-                        inputs=[brush_input],
-                        outputs=[magic_output]
-                    )
+def execute_magic_brush(editor_data, colab_url: str, engine_mode: str, progress=gr.Progress()):
+    """Dual-Engine Magic Eraser: Instant OpenCV Telea (<50ms) vs Deep Colab AI"""
+    if editor_data is None or "composite" not in editor_data:
+        return None, format_status("Please paint over an object first.", "warning")
 
-        # ----------------------------------------------------
-        # TAB 2: BACKGROUND & COMPOSITOR
-        # ----------------------------------------------------
-        with gr.Tab("🖼️ Background & Compositor"):
-            with gr.Row():
-                with gr.Column(scale=5, elem_classes=["cyber-card"]):
-                    bg_input = gr.Image(label="Upload Source Image", type="pil")
-                    
-                    with gr.Group():
-                        bg_engine = gr.Radio(["AI Neural Removal (rembg)", "Post Green Screen Keying", "Post Blue Screen Keying"], label="Processing Engine", value="AI Neural Removal (rembg)")
-                        bg_model = gr.Dropdown(["u2net", "u2netp", "u2net_human_seg", "isnet-general-use"], label="AI Model Selection", value="u2net")
-                        bg_mode = gr.Radio(["Checkerboard Preview", "Transparent (PNG)", "Solid Custom Color"], label="Background Mode", value="Checkerboard Preview")
-                        bg_color = gr.ColorPicker(label="Solid Color Picker", value="#000000")
-                    
-                    with gr.Accordion("Drop Shadow & Neon FX (Optional)", open=False):
-                        shadow_enable = gr.Checkbox(label="Enable Drop Shadow FX")
-                        halo_enable = gr.Checkbox(label="Enable Neon Backglow Halo")
-                    
-                    render_btn = gr.Button("🔥 EXECUTE STUDIO RENDER", elem_classes=["cyber-btn"])
+    bg = editor_data["background"]
+    layers = editor_data["layers"]
+    if not layers or bg is None:
+        return None, format_status("No painted area detected.", "warning")
 
-                with gr.Column(scale=6, elem_classes=["cyber-card"]):
-                    gr.Markdown("### 🎬 **Studio Render Result**")
-                    status_bar = gr.Textbox(value="STATUS: System Ready. Upload image to begin.", show_label=False, elem_classes=["status-box"])
-                    bg_output = gr.Image(label="Rendered Preview")
-                    
-                    render_btn.click(
-                        fn=dummy_bg_remover,
-                        inputs=[bg_input, bg_mode, bg_color],
-                        outputs=[bg_output]
-                    )
+    start_time = time.time()
+    img_pil = bg.convert("RGB")
+    mask_pil = layers[0].convert("L")
 
-        # ----------------------------------------------------
-        # TAB 3: 4X AI UPSCALER & CYBER FX
-        # ----------------------------------------------------
-        with gr.Tab("⚡ 4x AI Upscaler & Cyber FX"):
-            with gr.Row():
-                with gr.Column(scale=5, elem_classes=["cyber-card"]):
-                    upscale_input = gr.Image(label="Source Image", type="pil")
-                    
-                    with gr.Group():
-                        gr.Markdown("#### **Cinematic Color Grade Presets**")
-                        lut_preset = gr.Dropdown(["None", "Cyberpunk Neon", "Matrix Green", "Retro Anime 90s", "Monochrome Noir"], label="LUT Preset", value="None")
-                    
-                    with gr.Accordion("Retro Glitch & Pixel Art", open=False):
-                        rgb_glitch = gr.Checkbox(label="Enable RGB Glitch Split")
-                        glitch_shift = gr.Slider(1, 20, value=5, label="Glitch Shift")
-                        
-                    with gr.Accordion("Cyber Contour & 4X Resolution", open=False):
-                        contour = gr.Checkbox(label="Enable Cyber Outline Contouring")
-                        upscale_enable = gr.Checkbox(label="Enable AI 4X Super Resolution Scaler", value=True)
-                        sharpen = gr.Slider(1.0, 3.0, value=1.5, label="Sharpening Intensity")
+    # Engine Mode 1: Fast OpenCV Telea (<50ms local)
+    if "Ultra-Fast" in engine_mode:
+        progress(0.3, desc="⚡ Running Instant Telea Inpaint...")
+        img_np = np.array(img_pil)
+        mask_np = np.array(mask_pil)
+        inpainted = cv2.inpaint(img_np, mask_np, inpaintRadius=5, flags=cv2.INPAINT_TELEA)
+        elapsed = round(time.time() - start_time, 3)
+        return Image.fromarray(inpainted), format_status(f"Erased in {elapsed}s via Fast OpenCV Engine!", "success")
 
-                    cyber_btn = gr.Button("⚡ APPLY CYBER FX & SCALER", elem_classes=["cyber-btn"])
+    # Engine Mode 2: Colab Deep AI GPU
+    if colab_url and colab_url.strip():
+        try:
+            progress(0.4, desc="⚡ Offloading to Colab GPU Inpainter...")
+            buf_img, buf_mask = io.BytesIO(), io.BytesIO()
+            img_pil.save(buf_img, format="PNG")
+            mask_pil.save(buf_mask, format="PNG")
+            buf_img.seek(0); buf_mask.seek(0)
 
-                with gr.Column(scale=6, elem_classes=["cyber-card"]):
-                    cyber_status = gr.Textbox(value="STATUS: Cyber Suite Ready.", show_label=False, elem_classes=["status-box"])
-                    cyber_output = gr.Image(label="Enhanced Result")
-                    
-                    cyber_btn.click(
-                        fn=dummy_upscaler,
-                        inputs=[upscale_input, sharpen],
-                        outputs=[cyber_output]
-                    )
+            endpoint = f"{colab_url.strip('/')}/inpaint"
+            res = requests.post(endpoint, files={"image": ("i.png", buf_img, "image/png"), "mask": ("m.png", buf_mask, "image/png")}, timeout=30)
+            if res.status_code == 200:
+                elapsed = round(time.time() - start_time, 2)
+                return Image.open(io.BytesIO(res.content)), format_status(f"Erased in {elapsed}s via Colab GPU Engine!", "success")
+        except Exception as e:
+            print(f"Colab Inpaint error: {e}")
 
-        # ----------------------------------------------------
-        # TAB 4: WATERMARK & BRANDING
-        # ----------------------------------------------------
-        with gr.Tab("🏷️ Watermark & Branding"):
-            with gr.Row():
-                with gr.Column(scale=5, elem_classes=["cyber-card"]):
-                    wm_input = gr.Image(label="Base Image", type="pil")
-                    wm_text = gr.Textbox(label="Watermark Text", placeholder="© SHADOW FLAMEZ AI")
-                    wm_logo = gr.Image(label="Logo Overlay (Optional)", type="pil")
-                    wm_position = gr.Dropdown(["Bottom Right", "Bottom Left", "Center", "Top Right", "Tile Pattern"], label="Position", value="Bottom Right")
-                    wm_opacity = gr.Slider(10, 100, value=80, label="Opacity (%)")
-                    wm_btn = gr.Button("🏷️ APPLY WATERMARK", elem_classes=["cyber-btn"])
-                
-                with gr.Column(scale=6, elem_classes=["cyber-card"]):
-                    wm_output = gr.Image(label="Branded Result")
+    # Fallback to local Telea
+    img_np = np.array(img_pil)
+    mask_np = np.array(mask_pil)
+    inpainted = cv2.inpaint(img_np, mask_np, inpaintRadius=5, flags=cv2.INPAINT_TELEA)
+    elapsed = round(time.time() - start_time, 2)
+    return Image.fromarray(inpainted), format_status(f"Erased in {elapsed}s (Local Fallback)", "info")
 
-        # ----------------------------------------------------
-        # TAB 5: BATCH PROCESSING
-        # ----------------------------------------------------
-        with gr.Tab("📦 Batch Processing"):
-            with gr.Row():
-                with gr.Column(scale=5, elem_classes=["cyber-card"]):
-                    batch_files = gr.File(label="Upload Multiple Batch Images", file_count="multiple")
-                    batch_engine = gr.Radio(["AI Neural Removal (rembg)", "Post Green Screen Keying"], label="Processing Engine", value="AI Neural Removal (rembg)")
-                    batch_btn = gr.Button("🚀 PROCESS & DOWNLOAD ZIP", elem_classes=["cyber-btn"])
-                
-                with gr.Column(scale=6, elem_classes=["cyber-card"]):
-                    batch_status = gr.Textbox(value="STATUS: Batch Processor Ready.", show_label=False, elem_classes=["status-box"])
-                    batch_zip_output = gr.File(label="Download Processed Output ZIP")
 
-        # ----------------------------------------------------
-        # TAB 6: COLOR & TONE STUDIO
-        # ----------------------------------------------------
-        with gr.Tab("🎨 Color & Tone Studio"):
-            with gr.Row():
-                with gr.Column(scale=5, elem_classes=["cyber-card"]):
-                    color_input = gr.Image(label="Source Image", type="pil")
-                    brightness = gr.Slider(0.5, 2.0, value=1.0, label="Brightness")
-                    contrast = gr.Slider(0.5, 2.0, value=1.0, label="Contrast")
-                    saturation = gr.Slider(0.0, 3.0, value=1.0, label="Saturation")
-                    hue = gr.Slider(-180, 180, value=0, label="Hue Shift")
-                    color_btn = gr.Button("🎨 APPLY COLOR GRADE", elem_classes=["cyber-btn"])
-                
-                with gr.Column(scale=6, elem_classes=["cyber-card"]):
-                    color_output = gr.Image(label="Color Graded Result")
+# ==========================================
+# BUILD GRADIO APPLICATION
+# ==========================================
 
-        # ----------------------------------------------------
-        # TAB 7: SMART CANVAS & EXPORT
-        # ----------------------------------------------------
-        with gr.Tab("📐 Smart Canvas & Export"):
-            with gr.Row():
-                with gr.Column(scale=5, elem_classes=["cyber-card"]):
-                    canvas_input = gr.Image(label="Source Image", type="pil")
-                    aspect_ratio = gr.Dropdown(["Original", "1:1 Square (Instagram)", "16:9 Landscape (YouTube)", "9:16 Portrait (Reels/TikTok)", "4:5 Portrait"], label="Target Aspect Ratio", value="Original")
-                    export_format = gr.Radio(["PNG", "JPEG", "WEBP"], label="Export Format", value="PNG")
-                    export_btn = gr.Button("📐 RESIZE & EXPORT", elem_classes=["cyber-btn"])
-                
-                with gr.Column(scale=6, elem_classes=["cyber-card"]):
-                    canvas_output = gr.Image(label="Canvas Export Preview")
+def build_app():
+    with gr.Blocks(css=STUDIO_CSS, title="Shadow Flamez AI Studio Pro") as demo:
+        gr.HTML(STUDIO_HEADER_HTML)
 
-        # ----------------------------------------------------
-        # TAB 8: SESSION GALLERY DECK
-        # ----------------------------------------------------
-        with gr.Tab("🖼️ Session Gallery Deck"):
-            with gr.Column(elem_classes=["cyber-card"]):
-                gr.Markdown("### 📂 **Render History & Session Exports**")
-                gallery = gr.Gallery(label="Session Gallery Deck", columns=4, rows=2, height="auto")
-
-        # ----------------------------------------------------
-        # TAB 9: SYSTEM DIAGNOSTICS
-        # ----------------------------------------------------
-        with gr.Tab("📊 System Diagnostics"):
-            with gr.Column(elem_classes=["cyber-card"]):
-                gr.Markdown("### 🖥️ **Real-Time Diagnostics & Performance Metrics**")
-                diag_table = gr.Dataframe(
-                    headers=["Time", "Task", "Status", "Duration", "Details"],
-                    datatype=["str", "str", "str", "str", "str"],
-                    row_count=5,
-                    col_count=(5, "fixed"),
-                    interactive=False
+        # Global Colab GPU Connection Bar
+        with gr.Row(elem_classes=["cyber-card"]):
+            with gr.Column(scale=8):
+                colab_url_input = gr.Textbox(
+                    label="⚡ Google Colab GPU Backend Tunnel URL (Optional for 10x Speed)",
+                    placeholder="Paste ngrok URL here (e.g. https://xxxx.ngrok-free.app)",
+                    interactive=True
                 )
-                refresh_diag_btn = gr.Button("🔄 REFRESH DIAGNOSTICS", elem_classes=["cyber-btn"])
+            with gr.Column(scale=4):
+                gpu_status_btn = gr.Button("🔌 CHECK GPU CONNECTION", elem_classes=["cyber-btn"])
+                gpu_status_box = gr.HTML(format_status("Running on Render Local CPU", "info"))
 
-    # Studio Footer
-    gr.HTML("""
-    <div style="text-align: center; margin-top: 25px; opacity: 0.7; font-size: 0.8rem;">
-        ⚡ POWERED BY NEURAL PIPELINE V6.0 • RENDER HIGH-SPEED CONTAINER ACTIVE
-    </div>
-    """)
+        def check_gpu(url):
+            if not url or not url.strip():
+                return format_status("No Colab URL provided. Using Local CPU.", "info")
+            try:
+                res = requests.get(f"{url.strip('/')}/health", timeout=5)
+                if res.status_code == 200:
+                    data = res.json()
+                    return format_status(f"Connected to GPU: {data.get('gpu_name', 'Active')}", "success")
+            except Exception:
+                pass
+            return format_status("Colab Engine Offline or URL Invalid", "error")
+
+        gpu_status_btn.click(fn=check_gpu, inputs=[colab_url_input], outputs=[gpu_status_box])
+
+        # Main Studio Tabs
+        with gr.Tabs():
+            
+            # TAB 1: MAGIC BRUSH & OBJECT ERASER
+            with gr.Tab("🪄 Magic Brush & Eraser"):
+                with gr.Row():
+                    with gr.Column(scale=5, elem_classes=["cyber-card"]):
+                        gr.Markdown("### 🖌️ **Object Removal & Inpainting**")
+                        brush_editor = gr.ImageEditor(
+                            label="Draw over unwanted objects",
+                            type="pil",
+                            brush=gr.Brush(colors=["#ff0055"], default_size=25)
+                        )
+                        engine_choice = gr.Radio(
+                            ["Ultra-Fast Engine (OpenCV <50ms)", "Deep GPU AI Engine (Colab)"],
+                            value="Ultra-Fast Engine (OpenCV <50ms)",
+                            label="Eraser Engine Mode"
+                        )
+                        erase_btn = gr.Button("✨ ERASE UNWANTED OBJECTS", elem_classes=["cyber-btn"])
+
+                    with gr.Column(scale=6, elem_classes=["cyber-card"]):
+                        gr.Markdown("### 🖼️ **Erased Output Canvas**")
+                        erase_status = gr.HTML(format_status("Canvas Ready.", "info"))
+                        erase_output = gr.Image(label="Cleaned Result")
+
+                erase_btn.click(
+                    fn=execute_magic_brush,
+                    inputs=[brush_editor, colab_url_input, engine_choice],
+                    outputs=[erase_output, erase_status]
+                )
+
+            # TAB 2: BACKGROUND & COMPOSITOR
+            with gr.Tab("🖼️ Background & Compositor"):
+                with gr.Row():
+                    with gr.Column(scale=5, elem_classes=["cyber-card"]):
+                        bg_in = gr.Image(type="pil", label="Upload Source Image", sources=["upload", "clipboard"])
+                        bg_model = gr.Dropdown(["u2net", "isnet-general-use", "u2netp", "silueta"], value="u2net", label="AI Model")
+                        bg_mode = gr.Radio(["Transparent (PNG)", "Solid Custom Color"], value="Transparent (PNG)", label="Background Mode")
+                        solid_col = gr.ColorPicker(value="#0F3460", label="Solid Color Picker")
+                        btn_bg = gr.Button("🔥 EXECUTE STUDIO RENDER", elem_classes=["cyber-btn"])
+
+                    with gr.Column(scale=6, elem_classes=["cyber-card"]):
+                        bg_status = gr.HTML(format_status("System Ready.", "info"))
+                        bg_out = gr.Image(label="Rendered Preview")
+
+                def process_bg_tab(img, url, model, mode, col):
+                    if img is None:
+                        return None, format_status("Please upload an image.", "warning")
+                    start = time.time()
+                    fg = execute_bg_removal(img, url, model)
+                    if mode == "Solid Custom Color" and fg is not None:
+                        bg_canvas = Image.new("RGBA", fg.size, col)
+                        bg_canvas.paste(fg, (0, 0), mask=fg.split()[3])
+                        fg = bg_canvas
+                    elapsed = round(time.time() - start, 2)
+                    return fg, format_status(f"Rendered in {elapsed}s!", "success")
+
+                btn_bg.click(
+                    fn=process_bg_tab,
+                    inputs=[bg_in, colab_url_input, bg_model, bg_mode, solid_col],
+                    outputs=[bg_out, bg_status]
+                )
+
+            # TAB 3: 4X UPSCALER & CYBER FX
+            with gr.Tab("⚡ 4x AI Upscaler & Cyber FX"):
+                with gr.Row():
+                    with gr.Column(scale=5, elem_classes=["cyber-card"]):
+                        cyber_in = gr.Image(type="pil", label="Source Image")
+                        lut_preset = gr.Dropdown(["None", "Cyberpunk Neo", "Matrix Green", "Noir Monochrome"], value="None", label="LUT Preset")
+                        sharpness = gr.Slider(1.0, 3.0, value=1.5, label="Sharpness Boost")
+                        btn_cyber = gr.Button("⚡ APPLY CYBER FX & SCALER", elem_classes=["cyber-btn"])
+
+                    with gr.Column(scale=6, elem_classes=["cyber-card"]):
+                        cyber_status = gr.HTML(format_status("Cyber Suite Ready.", "info"))
+                        cyber_out = gr.Image(label="Enhanced Result")
+
+                def process_cyber(img, url, lut, sharp):
+                    if img is None:
+                        return None, format_status("Upload an image first.", "warning")
+                    start = time.time()
+                    res = img.convert("RGBA")
+                    if lut == "Cyberpunk Neo":
+                        res = ImageEnhance.Color(res).enhance(1.4)
+                    w, h = res.size
+                    res = res.resize((w * 4, h * 4), Image.Resampling.LANCZOS)
+                    res = ImageEnhance.Sharpen(res).enhance(sharp)
+                    elapsed = round(time.time() - start, 2)
+                    return res, format_status(f"4X Scaled in {elapsed}s!", "success")
+
+                btn_cyber.click(fn=process_cyber, inputs=[cyber_in, colab_url_input, lut_preset, sharpness], outputs=[cyber_out, cyber_status])
+
+            # TAB 4: WATERMARK & BRANDING
+            with gr.Tab("🏷️ Watermark & Branding"):
+                with gr.Row():
+                    with gr.Column(scale=5, elem_classes=["cyber-card"]):
+                        wm_in = gr.Image(type="pil", label="Base Image")
+                        wm_text = gr.Textbox(label="Watermark Text", value="© SHADOW FLAMEZ AI")
+                        btn_wm = gr.Button("🏷️ APPLY WATERMARK", elem_classes=["cyber-btn"])
+                    with gr.Column(scale=6, elem_classes=["cyber-card"]):
+                        wm_out = gr.Image(label="Branded Result")
+
+            # TAB 5: BATCH PROCESSING
+            with gr.Tab("📦 Batch Processing"):
+                with gr.Row():
+                    with gr.Column(scale=5, elem_classes=["cyber-card"]):
+                        batch_files = gr.File(file_count="multiple", label="Upload Batch Images")
+                        btn_batch = gr.Button("📦 PROCESS & DOWNLOAD ZIP", elem_classes=["cyber-btn"])
+                    with gr.Column(scale=6, elem_classes=["cyber-card"]):
+                        batch_status = gr.HTML(format_status("Batch Processor Ready.", "info"))
+                        batch_zip = gr.File(label="Download Processed Output ZIP")
+
+            # TAB 6: COLOR & TONE STUDIO
+            with gr.Tab("🎨 Color & Tone Studio"):
+                with gr.Row():
+                    with gr.Column(scale=5, elem_classes=["cyber-card"]):
+                        color_in = gr.Image(type="pil", label="Source Image")
+                        bright = gr.Slider(0.5, 2.0, value=1.0, label="Brightness")
+                        contrast = gr.Slider(0.5, 2.0, value=1.0, label="Contrast")
+                        btn_color = gr.Button("🎨 APPLY COLOR GRADE", elem_classes=["cyber-btn"])
+                    with gr.Column(scale=6, elem_classes=["cyber-card"]):
+                        color_out = gr.Image(label="Color Graded Preview")
+
+            # TAB 7: SMART CANVAS & EXPORT
+            with gr.Tab("📐 Smart Canvas & Export"):
+                with gr.Row():
+                    with gr.Column(scale=5, elem_classes=["cyber-card"]):
+                        canvas_in = gr.Image(type="pil", label="Source Image")
+                        aspect = gr.Dropdown(["Original", "1:1 Square", "16:9 Landscape", "9:16 Story"], value="Original", label="Aspect Ratio")
+                        btn_canvas = gr.Button("📐 RESIZE & EXPORT", elem_classes=["cyber-btn"])
+                    with gr.Column(scale=6, elem_classes=["cyber-card"]):
+                        canvas_out = gr.Image(label="Export Preview")
+
+            # TAB 8: SESSION GALLERY DECK
+            with gr.Tab("🖼️ Session Gallery Deck"):
+                with gr.Column(elem_classes=["cyber-card"]):
+                    gr.Markdown("### 📂 **Session History**")
+                    gallery = gr.Gallery(label="Output Deck", columns=4)
+
+            # TAB 9: SYSTEM DIAGNOSTICS
+            with gr.Tab("📊 System Diagnostics"):
+                with gr.Column(elem_classes=["cyber-card"]):
+                    gr.Markdown("### 🖥️ **System Health & Metrics**")
+                    diag_box = gr.JSON(value={"Render_Frontend": "Online", "Queue_Status": "Active"})
+
+        gr.HTML(STUDIO_FOOTER_HTML)
+
+    return demo
+
 
 if __name__ == "__main__":
-    demo.launch()
+    app_demo = build_app()
+    # Unlock multi-threaded processing queue
+    app_demo.queue(default_concurrency_limit=4).launch(
+        server_name="0.0.0.0",
+        server_port=7860
+    )
